@@ -20,6 +20,8 @@ export type Book = {
   addedByEmail: string;
   totalCopies: number;
   availableCopies: number;
+  /** Optional star rating (0–5) displayed on the details page. */
+  rating?: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -76,6 +78,8 @@ export type BookResponse = {
   userName: string;
   /** Email of the user who added the book. */
   userEmail: string;
+  /** Optional star rating (0–5), when the book has one. */
+  rating?: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -94,6 +98,7 @@ export const toBookResponse = (doc: Book): BookResponse => ({
   addedBy: doc.addedBy,
   userName: doc.addedByName,
   userEmail: doc.addedByEmail,
+  ...(doc.rating !== undefined ? { rating: doc.rating } : {}),
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt,
 });

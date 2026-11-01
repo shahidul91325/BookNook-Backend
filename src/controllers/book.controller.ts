@@ -3,6 +3,7 @@ import type { Db } from "mongodb";
 import { getBooksCollection } from "../config/collections.js";
 import {
   findBookById,
+  insertBook,
   listBooks,
   type BookListOptions,
 } from "../repositories/book.repository.js";
@@ -10,8 +11,11 @@ import {
   toBookResponse,
   type BookListFilter,
   type BookSort,
+  type CreateBookInput,
 } from "../models/book.model.js";
 import { isValidObjectId } from "../utils/objectId.js";
+import { sendUnauthorized } from "../middleware/auth.js";
+import { createBookSchema, formatZodIssues } from "../validations/book.validation.js";
 
 /**
  * Public book read controllers (GET /api/books, GET /api/books/:id).
@@ -140,6 +144,69 @@ export const createGetBookById =
       // The frontend reads the book from the `data` key of the envelope.
       res.status(200).json({
         status: "success",
+        data: toBookResponse(book),
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+/**
+ * POST /api/books — create a book (requires verified authentication).
+ *
+ * Ownership (`addedBy` / `addedByName` / `addedByEmail`) is taken
+ * EXCLUSIVELY from `req.auth`, which the Phase 3 middleware populated by
+ * cryptographically verifying the Better Auth session. Anything ownership-
+ * related in the request body (`userName`, `userEmail`, `addedBy`, …) is
+ * stripped by the Zod schema and can never influence the stored document.
+ */
+export const createCreateBook =
+  (db: Db): RequestHandler =>
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      // `requireAuth` runs first; this is a defensive guard so identity is
+      // never inferred from the request if the middleware chain changed.
+      const auth = req.auth;
+      if (!auth) {
+        sendUnauthorized(res);
+        return;
+      }
+
+      const parsed = createBookSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({
+          status: "fail",
+          message: "Validation failed. Please fix the highlighted fields.",
+          errors: formatZodIssues(parsed.error),
+        });
+        return;
+      }
+
+      const payload = parsed.data;
+
+      // Server-derived book document: ownership comes from the verified
+      // session, timestamps are generated here, and both copy counters
+      // start at the validated quantity (everything available on creation).
+      const input: CreateBookInput = {
+        title: payload.title,
+        author: payload.author,
+        category: payload.category,
+        image: payload.image,
+        description: payload.description,
+        addedBy: auth.user.id,
+        addedByName: auth.user.name,
+        addedByEmail: auth.user.email,
+        totalCopies: payload.quantity,
+        availableCopies: payload.quantity,
+        ...(payload.rating !== undefined ? { rating: payload.rating } : {}),
+      };
+
+      const book = await insertBook(getBooksCollection(db), input);
+
+      // 201 Created + the same `data` envelope the details endpoint returns.
+      res.status(201).json({
+        status: "success",
+        message: "Book added to the library.",
         data: toBookResponse(book),
       });
     } catch (error) {

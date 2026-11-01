@@ -9,6 +9,7 @@
     "verify:models": "tsx scripts/verify-data-models.ts",
     "verify:auth": "tsx scripts/verify-auth.ts",
     "verify:books": "tsx scripts/verify-books.ts",
+    "verify:create": "tsx scripts/verify-create-book.ts",
     "start": "node dist/server.js"
   },
   "keywords": [],
@@ -19,7 +20,8 @@
     "cors": "^2.8.6",
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
-    "mongodb": "^7.8.0"
+    "mongodb": "^7.8.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

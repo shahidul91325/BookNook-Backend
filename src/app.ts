@@ -8,7 +8,11 @@ import cors, { type CorsOptions } from "cors";
 import type { Db } from "mongodb";
 import { env } from "./config/env.js";
 import { createRequireAuth } from "./middleware/auth.js";
-import { createGetBooks, createGetBookById } from "./controllers/book.controller.js";
+import {
+  createCreateBook,
+  createGetBooks,
+  createGetBookById,
+} from "./controllers/book.controller.js";
 
 const createApp = (db: Db): Express => {
   const app = express();
@@ -53,6 +57,10 @@ const createApp = (db: Db): Express => {
       data: req.auth?.user,
     });
   });
+
+  // Create a book. `requireAuth` establishes identity from the verified
+  // Better Auth session; ownership fields in the body are ignored.
+  app.post("/api/books", requireAuth, createCreateBook(db));
 
   // 404 handler
   app.use((req: Request, res: Response) => {
