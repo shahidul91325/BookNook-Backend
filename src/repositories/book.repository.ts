@@ -119,6 +119,48 @@ export const updateBookById = async (
   );
 };
 
+/**
+ * Updates a book ONLY if it still belongs to `ownerId`.
+ *
+ * The ownership condition lives inside the query itself, so even if the
+ * controller's pre-check raced with another request, MongoDB will never
+ * modify another user's document. `update` must already exclude ownership
+ * and server-managed fields (built from the parsed Zod payload).
+ * Returns the updated document, or null when not found / not owned.
+ */
+export const updateBookForOwner = async (
+  books: Collection<Book>,
+  id: string,
+  ownerId: string,
+  update: Partial<CreateBookInput>
+): Promise<Book | null> => {
+  const objectId = toObjectId(id);
+  if (!objectId) return null;
+
+  return books.findOneAndUpdate(
+    { _id: objectId, addedBy: ownerId },
+    { $set: { ...update, updatedAt: new Date() } },
+    { returnDocument: "after" }
+  );
+};
+
+/**
+ * Deletes a book ONLY if it still belongs to `ownerId` (same query-level
+ * ownership guard as `updateBookForOwner`).
+ * Returns true when a document was actually deleted.
+ */
+export const deleteBookForOwner = async (
+  books: Collection<Book>,
+  id: string,
+  ownerId: string
+): Promise<boolean> => {
+  const objectId = toObjectId(id);
+  if (!objectId) return false;
+
+  const result = await books.deleteOne({ _id: objectId, addedBy: ownerId });
+  return result.deletedCount === 1;
+};
+
 /** Atomically reserves one copy. Returns null if no copy is available. */
 export const reserveOneCopy = async (
   books: Collection<Book>,

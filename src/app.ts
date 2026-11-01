@@ -10,8 +10,11 @@ import { env } from "./config/env.js";
 import { createRequireAuth } from "./middleware/auth.js";
 import {
   createCreateBook,
+  createDeleteBook,
   createGetBooks,
   createGetBookById,
+  createGetMyBooks,
+  createUpdateBook,
 } from "./controllers/book.controller.js";
 
 const createApp = (db: Db): Express => {
@@ -35,14 +38,6 @@ const createApp = (db: Db): Express => {
     });
   });
 
-  // ── Public book read APIs ───────────────────────────────────────────────
-  // Assignment requirement: catalog + details stay publicly readable.
-  // NOTE for future phases: register any static sub-routes (e.g.
-  // GET /api/books/my, GET /api/books/user/:email) BEFORE the `:id` route
-  // below, otherwise `:id` would swallow them.
-  app.get("/api/books", createGetBooks(db));
-  app.get("/api/books/:id", createGetBookById(db));
-
   // ── Protected routes ────────────────────────────────────────────────────
   // Every private route goes through `requireAuth`, which only trusts a
   // cryptographically verified Better Auth session — never client-supplied
@@ -61,6 +56,36 @@ const createApp = (db: Db): Express => {
   // Create a book. `requireAuth` establishes identity from the verified
   // Better Auth session; ownership fields in the body are ignored.
   app.post("/api/books", requireAuth, createCreateBook(db));
+
+  // ── My Books (owner list) ──────────────────────────────────────────────
+  // The frontend's getMyBooks() tries /api/my-books first, then falls back
+  // to /api/books/my and /api/books/user. All three are implemented so the
+  // fallback chain resolves on the first hop. The owner filter is ALWAYS
+  // the verified session user id — the email in the frontend's final
+  // fallback (/api/books/user/:email) is deliberately NOT implemented as an
+  // identity source: trusting a client-supplied email would let anyone
+  // enumerate another user's books. That route simply 404s, and the chain
+  // never reaches it because the session-based routes succeed.
+  // Registered BEFORE GET /api/books/:id so ":id" cannot swallow "my"/"user".
+  app.get("/api/my-books", requireAuth, createGetMyBooks(db));
+  app.get("/api/books/my", requireAuth, createGetMyBooks(db));
+  app.get("/api/books/user", requireAuth, createGetMyBooks(db));
+
+  // ── Public book read APIs ───────────────────────────────────────────────
+  // Assignment requirement: catalog + details stay publicly readable.
+  // NOTE: static sub-routes (e.g. GET /api/books/my) are registered above,
+  // BEFORE this `:id` route, otherwise ":id" would swallow them.
+  app.get("/api/books", createGetBooks(db));
+  app.get("/api/books/:id", createGetBookById(db));
+
+  // ── Book update & delete (owner-only) ──────────────────────────────────
+  // The assignment specifies PATCH /api/books/:id; the frontend's
+  // bookService.updateBook() sends PUT. Both verbs share the same handler
+  // so the API contract holds for either caller. DELETE matches the
+  // frontend's bookService.deleteBook() exactly.
+  app.patch("/api/books/:id", requireAuth, createUpdateBook(db));
+  app.put("/api/books/:id", requireAuth, createUpdateBook(db));
+  app.delete("/api/books/:id", requireAuth, createDeleteBook(db));
 
   // 404 handler
   app.use((req: Request, res: Response) => {

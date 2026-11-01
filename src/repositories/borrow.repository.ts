@@ -90,6 +90,26 @@ export const findActiveBorrowsByBook = async (
 ): Promise<Borrow[]> =>
   borrows.find({ bookId, status: "borrowed" }).toArray();
 
+/** Counts active (still borrowed) records for a book. */
+export const countActiveBorrowsByBook = async (
+  borrows: Collection<Borrow>,
+  bookId: ObjectId
+): Promise<number> =>
+  borrows.countDocuments({ bookId, status: "borrowed" });
+
+/**
+ * Deletes every borrow record that references a book.
+ * Called when the book itself is deleted so no orphaned records
+ * (pointing at a nonexistent bookId) are ever left behind.
+ */
+export const deleteBorrowsByBook = async (
+  borrows: Collection<Borrow>,
+  bookId: ObjectId
+): Promise<number> => {
+  const result = await borrows.deleteMany({ bookId });
+  return result.deletedCount;
+};
+
 /** True if the user already has an active borrow of this book. */
 export const hasActiveBorrow = async (
   borrows: Collection<Borrow>,

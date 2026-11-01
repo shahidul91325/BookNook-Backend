@@ -78,8 +78,70 @@ export const createBookSchema = z.object({
     .optional(),
 });
 
+/**
+ * Body schema for PATCH/PUT /api/books/:id — every field is OPTIONAL so
+ * omitted fields are simply preserved (only provided fields are $set).
+ *
+ * SECURITY: like the create schema, it declares NO ownership fields
+ * (`addedBy`, `addedByName`, `addedByEmail`, `userName`, `userEmail`) and
+ * no server-managed fields (`createdAt`, `updatedAt`, `availableCopies`,
+ * `id`, `_id`) — Zod strips them, so ownership can never be transferred
+ * through an update request.
+ *
+ * `quantity` may be 0 here (the frontend edit dialog allows setting a book
+ * to zero copies) — unlike creation, which requires at least 1.
+ */
+export const updateBookSchema = z
+  .object({
+    title: z
+      .string()
+      .trim()
+      .min(2, "Title must be at least 2 characters.")
+      .max(200, "Title must be at most 200 characters.")
+      .optional(),
+    author: z
+      .string()
+      .trim()
+      .min(2, "Author must be at least 2 characters.")
+      .max(120, "Author must be at most 120 characters.")
+      .optional(),
+    category: z
+      .enum(BOOK_CATEGORIES, {
+        error: "Category must be one of the allowed BookNook categories.",
+      })
+      .optional(),
+    image: z
+      .string()
+      .trim()
+      .min(1, "Book cover image is required.")
+      .regex(IMAGE_PATTERN, "Image must be an HTTP/HTTPS URL or an /uploads/ path.")
+      .optional(),
+    description: z
+      .string()
+      .trim()
+      .min(10, "Description must be at least 10 characters.")
+      .max(2000, "Description must be at most 2000 characters.")
+      .optional(),
+    /** Frontend alias for `totalCopies`; 0 is allowed (book fully checked out). */
+    quantity: z.coerce
+      .number()
+      .int("Quantity must be a whole number of copies.")
+      .min(0, "Quantity must be 0 or greater.")
+      .max(1000, "Quantity must be at most 1000 copies.")
+      .optional(),
+    rating: z.coerce
+      .number()
+      .min(0, "Rating must be between 0 and 5.")
+      .max(5, "Rating must be between 0 and 5.")
+      .optional(),
+  })
+  .refine((payload) => Object.values(payload).some((v) => v !== undefined), {
+    error: "Provide at least one field to update.",
+  });
+
 /** The body shape after Zod parsing/normalization. */
 export type CreateBookPayload = z.infer<typeof createBookSchema>;
+export type UpdateBookPayload = z.infer<typeof updateBookSchema>;
 
 /** Groups Zod issues into a `field → messages[]` map for the 400 response. */
 export const formatZodIssues = (

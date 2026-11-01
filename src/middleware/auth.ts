@@ -27,10 +27,10 @@ export const sendUnauthorized = (res: Response): void => {
 };
 
 /** Sends the consistent 403 response used by every authorization failure. */
-export const sendForbidden = (res: Response): void => {
+export const sendForbidden = (res: Response, message?: string): void => {
   res.status(403).json({
     status: "fail",
-    message: "You do not have permission to perform this action.",
+    message: message ?? "You do not have permission to perform this action.",
   });
 };
 
