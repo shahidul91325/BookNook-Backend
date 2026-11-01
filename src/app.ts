@@ -16,6 +16,11 @@ import {
   createGetMyBooks,
   createUpdateBook,
 } from "./controllers/book.controller.js";
+import {
+  createBorrowBook,
+  createGetMyBorrows,
+  createReturnBook,
+} from "./controllers/borrow.controller.js";
 
 const createApp = (db: Db): Express => {
   const app = express();
@@ -86,6 +91,26 @@ const createApp = (db: Db): Express => {
   app.patch("/api/books/:id", requireAuth, createUpdateBook(db));
   app.put("/api/books/:id", requireAuth, createUpdateBook(db));
   app.delete("/api/books/:id", requireAuth, createDeleteBook(db));
+
+  // ── Borrowing & returning ──────────────────────────────────────────────
+  // POST /api/borrows reserves a copy atomically and records the borrow.
+  app.post("/api/borrows", requireAuth, createBorrowBook(db));
+
+  // GET /api/borrows lists ONLY the verified session user's records. The
+  // aliases match the frontend's getUserBorrows() fallback chain; the
+  // email-based variants (/api/borrows/user/:email, ?email=) are
+  // deliberately NOT implemented — identity never comes from the client.
+  app.get("/api/borrows", requireAuth, createGetMyBorrows(db));
+  app.get("/api/my-borrows", requireAuth, createGetMyBorrows(db));
+  app.get("/api/borrows/my", requireAuth, createGetMyBorrows(db));
+  app.get("/api/borrows/user", requireAuth, createGetMyBorrows(db));
+
+  // DELETE /api/borrows/:id marks the borrow returned and restores the
+  // copy exactly once. The PUT/PATCH /return aliases match the frontend's
+  // preferred returnBook() paths so its first request succeeds.
+  app.delete("/api/borrows/:id", requireAuth, createReturnBook(db));
+  app.put("/api/borrows/:id/return", requireAuth, createReturnBook(db));
+  app.patch("/api/borrows/:id/return", requireAuth, createReturnBook(db));
 
   // 404 handler
   app.use((req: Request, res: Response) => {

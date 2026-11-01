@@ -1,5 +1,6 @@
 import {
   ObjectId,
+  type ClientSession,
   type Collection,
   type Filter,
 } from "mongodb";
@@ -10,17 +11,26 @@ import type {
 } from "../models/borrow.model.js";
 import { toObjectId } from "../utils/objectId.js";
 
-const DEFAULT_BORROW_DAYS = 14;
+/** Default lending period when the borrower does not request one. */
+export const DEFAULT_BORROW_DAYS = 14;
+/** Hard server-side cap on how far ahead a return deadline may be set. */
+export const MAX_BORROW_DAYS = 30;
 
 export type BorrowListOptions = {
   skip?: number;
   limit?: number;
 };
 
-/** Inserts a new borrow record in `borrowed` status. */
+/**
+ * Inserts a new borrow record in `borrowed` status.
+ * `borrowDate`/`returnDate` are generated on the SERVER: the deadline is
+ * the validated client request if given, else `DEFAULT_BORROW_DAYS` out.
+ * Pass `session` to enroll the insert in a surrounding transaction.
+ */
 export const insertBorrow = async (
   borrows: Collection<Borrow>,
-  input: CreateBorrowInput
+  input: CreateBorrowInput,
+  session?: ClientSession
 ): Promise<Borrow> => {
   const now = new Date();
   const borrow: Borrow = {
@@ -36,7 +46,7 @@ export const insertBorrow = async (
     returnedAt: null,
     status: "borrowed",
   };
-  await borrows.insertOne(borrow);
+  await borrows.insertOne(borrow, session ? { session } : undefined);
   return borrow;
 };
 
@@ -121,12 +131,16 @@ export const hasActiveBorrow = async (
 };
 
 /**
- * Marks a borrow as returned (sets status + returnedAt).
- * Returns null if not found or already returned.
+ * Marks a borrow as returned (sets status + returnedAt) with an ATOMIC
+ * conditional flip: only a record still in `borrowed` status matches, so
+ * concurrent return requests can restore the copy exactly once.
+ * Returns null when not found or already returned.
+ * Pass `session` to enroll the update in a surrounding transaction.
  */
 export const markBorrowReturned = async (
   borrows: Collection<Borrow>,
-  id: string
+  id: string,
+  session?: ClientSession
 ): Promise<Borrow | null> => {
   const objectId = toObjectId(id);
   if (!objectId) return null;
@@ -134,7 +148,7 @@ export const markBorrowReturned = async (
   return borrows.findOneAndUpdate(
     { _id: objectId, status: "borrowed" },
     { $set: { status: "returned", returnedAt: new Date() } },
-    { returnDocument: "after" }
+    { returnDocument: "after", ...(session ? { session } : {}) }
   );
 };
 

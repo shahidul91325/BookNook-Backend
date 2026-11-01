@@ -1,5 +1,6 @@
 import {
   ObjectId,
+  type ClientSession,
   type Collection,
   type Filter,
   type Sort,
@@ -161,10 +162,16 @@ export const deleteBookForOwner = async (
   return result.deletedCount === 1;
 };
 
-/** Atomically reserves one copy. Returns null if no copy is available. */
+/**
+ * Atomically reserves one copy via a conditional decrement — the `availableCopies: { $gt: 0 }`
+ * filter means concurrent requests can never take the same final copy.
+ * Returns null when the book is missing or fully checked out.
+ * Pass `session` to enroll in a surrounding transaction.
+ */
 export const reserveOneCopy = async (
   books: Collection<Book>,
-  id: string
+  id: string,
+  session?: ClientSession
 ): Promise<Book | null> => {
   const objectId = toObjectId(id);
   if (!objectId) return null;
@@ -172,14 +179,20 @@ export const reserveOneCopy = async (
   return books.findOneAndUpdate(
     { _id: objectId, availableCopies: { $gt: 0 } },
     { $inc: { availableCopies: -1 }, $set: { updatedAt: new Date() } },
-    { returnDocument: "after" }
+    { returnDocument: "after", ...(session ? { session } : {}) }
   );
 };
 
-/** Atomically releases one copy, clamped so it never exceeds totalCopies. */
+/**
+ * Atomically releases one copy, clamped with $min/$totalCopies so the
+ * counter can never exceed the book's total copies (stays consistent even
+ * if the owner shrank the quantity while the book was out).
+ * Pass `session` to enroll in a surrounding transaction.
+ */
 export const releaseOneCopy = async (
   books: Collection<Book>,
-  id: string
+  id: string,
+  session?: ClientSession
 ): Promise<Book | null> => {
   const objectId = toObjectId(id);
   if (!objectId) return null;
@@ -196,6 +209,6 @@ export const releaseOneCopy = async (
         },
       },
     ],
-    { returnDocument: "after" }
+    { returnDocument: "after", ...(session ? { session } : {}) }
   );
 };

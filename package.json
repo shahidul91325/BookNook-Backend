@@ -11,6 +11,7 @@
     "verify:books": "tsx scripts/verify-books.ts",
     "verify:create": "tsx scripts/verify-create-book.ts",
     "verify:manage": "tsx scripts/verify-manage-book.ts",
+    "verify:borrows": "tsx scripts/verify-borrow.ts",
     "start": "node dist/server.js"
   },
   "keywords": [],
