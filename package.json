@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "verify:models": "tsx scripts/verify-data-models.ts",
     "start": "node dist/server.js"
   },
   "keywords": [],

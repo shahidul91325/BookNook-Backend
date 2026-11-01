@@ -1,10 +1,12 @@
 import createApp from "./app.js";
 import { connectDB, closeDB } from "./config/db.js";
+import { ensureIndexes } from "./config/indexes.js";
 import { env } from "./config/env.js";
 
 const startServer = async (): Promise<void> => {
   try {
-    await connectDB();
+    const db = await connectDB();
+    await ensureIndexes(db);
 
     const app = createApp();
 
