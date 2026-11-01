@@ -10,18 +10,11 @@ import type { ClientSession, Db } from "mongodb";
  * error code 20 (IllegalOperation) with a "Transaction numbers are only
  * allowed on a replica set member or mongos" message on the first
  * transactional operation.
+ *
+ * Client-visible domain outcomes (e.g. "no copies available") are thrown
+ * as `OperationError` from `src/utils/errors.ts`; the centralized error
+ * handler turns them into the matching HTTP response.
  */
-
-/** Error thrown by `work`/`fallback` to signal a client-visible outcome. */
-export class OperationError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string
-  ) {
-    super(message);
-    this.name = "OperationError";
-  }
-}
 
 const isTransactionUnsupported = (error: unknown): boolean => {
   const err = error as { code?: number; message?: string };

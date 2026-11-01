@@ -12,6 +12,8 @@
     "verify:create": "tsx scripts/verify-create-book.ts",
     "verify:manage": "tsx scripts/verify-manage-book.ts",
     "verify:borrows": "tsx scripts/verify-borrow.ts",
+    "verify:security": "tsx scripts/verify-security.ts",
+    "verify": "npm run build && npm run verify:models && npm run verify:auth && npm run verify:books && npm run verify:create && npm run verify:manage && npm run verify:borrows && npm run verify:security",
     "start": "node dist/server.js"
   },
   "keywords": [],

@@ -1,13 +1,15 @@
-import express, {
-  type Express,
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
+import express, { type Express, type Request, type Response } from "express";
 import cors, { type CorsOptions } from "cors";
 import type { Db } from "mongodb";
 import { env } from "./config/env.js";
 import { createRequireAuth } from "./middleware/auth.js";
+import { validateBody, validateObjectId } from "./middleware/validate.js";
+import {
+  createRateLimit,
+  type RateLimitOptions,
+} from "./middleware/rateLimit.js";
+import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
+import { sendSuccess } from "./utils/httpResponse.js";
 import {
   createCreateBook,
   createDeleteBook,
@@ -21,22 +23,105 @@ import {
   createGetMyBorrows,
   createReturnBook,
 } from "./controllers/borrow.controller.js";
+import {
+  createBookSchema,
+  updateBookSchema,
+} from "./validations/book.validation.js";
+import { borrowBookSchema } from "./validations/borrow.validation.js";
 
-const createApp = (db: Db): Express => {
+/**
+ * Hardening options for `createApp` — mainly used by verification scripts
+ * to exercise the rate limiter with tiny budgets without touching the
+ * process-wide configuration. Production code calls `createApp(db)`.
+ */
+export type AppOptions = {
+  rateLimit?: {
+    global?: Partial<Omit<RateLimitOptions, "scope">>;
+    write?: Partial<Omit<RateLimitOptions, "scope">>;
+  };
+};
+
+/**
+ * Max JSON request body. Book payloads top out around a few KB (the Zod
+ * schemas cap every string field), so half a megabyte is already very
+ * generous — anything larger is rejected with 413 before parsing.
+ */
+const JSON_BODY_LIMIT = "512kb";
+
+/**
+ * Minimal API security headers (no extra dependency needed).
+ *   - `nosniff`: responses must be consumed as their declared type.
+ *   - `X-Frame-Options: DENY`: API payloads must not be framed.
+ *   - `Referrer-Policy`: no referrer leaks from API consumers.
+ *   - `Cache-Control: no-store`: responses include private user data
+ *     (borrows, emails); they must never be cached by proxies/browsers.
+ */
+const applySecurityHeaders = (req: Request, res: Response, next: () => void) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  if (req.path.startsWith("/api")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+};
+
+const createApp = (db: Db, options: AppOptions = {}): Express => {
   const app = express();
 
-  // CORS — allow only the Next.js frontend origin
+  // Behind a trusted reverse proxy? Only then trust X-Forwarded-For so
+  // rate limiting sees real client IPs (see TRUST_PROXY in .env.example —
+  // enabling it on a directly-exposed server would let clients spoof IPs).
+  if (env.TRUST_PROXY > 0) {
+    app.set("trust proxy", env.TRUST_PROXY);
+  }
+  // Do not advertise the framework in the X-Powered-By header.
+  app.disable("x-powered-by");
+
+  // ── CORS ────────────────────────────────────────────────────────────────
+  // Allowlist only: `env.CORS_ORIGINS` holds EXACT origins parsed (and
+  // wildcard-rejected) at startup. Requests from any other origin simply
+  // receive no `Access-Control-Allow-Origin` header, so browsers refuse
+  // to hand their responses to that site. Credentials (the Better Auth
+  // session cookie) are allowed ONLY for those origins. Requested headers
+  // are reflected as-is: CORS is not an authorization boundary here —
+  // identity comes from the HMAC-verified session, never from headers.
   const corsOptions: CorsOptions = {
-    origin: env.CORS_ORIGIN.split(",").map((origin) => origin.trim()),
+    origin: env.CORS_ORIGINS,
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    optionsSuccessStatus: 204,
+    maxAge: 600,
   };
   app.use(cors(corsOptions));
-  app.use(express.json());
+  app.use(applySecurityHeaders);
+
+  // Body parsing with a hard size cap; oversized/malformed bodies are
+  // turned into clean 413/400 envelopes by the centralized error handler.
+  app.use(express.json({ limit: JSON_BODY_LIMIT }));
+
+  // ── Rate limiting ───────────────────────────────────────────────────────
+  // Two in-memory buckets per client IP: a broad one for ALL traffic, and
+  // a stricter one for write endpoints (create/update/delete/borrow/
+  // return) — the sensitive operations an attacker would abuse. Both run
+  // BEFORE authentication so hammering cannot drive session lookups.
+  const globalLimiter = createRateLimit({
+    scope: "global",
+    windowMs: env.RATE_LIMIT_WINDOW_MS,
+    max: env.RATE_LIMIT_MAX,
+    ...options.rateLimit?.global,
+  });
+  const writeLimiter = createRateLimit({
+    scope: "write",
+    windowMs: env.RATE_LIMIT_WINDOW_MS,
+    max: env.RATE_LIMIT_WRITE_MAX,
+    ...options.rateLimit?.write,
+  });
+  app.use(globalLimiter);
 
   // Health check
   app.get("/api/health", (_req: Request, res: Response) => {
-    res.status(200).json({
-      status: "success",
+    sendSuccess(res, {
       message: "BookNook API is running",
       environment: env.NODE_ENV,
       timestamp: new Date().toISOString(),
@@ -47,20 +132,26 @@ const createApp = (db: Db): Express => {
   // Every private route goes through `requireAuth`, which only trusts a
   // cryptographically verified Better Auth session — never client-supplied
   // identity fields. `req.auth.user.id` is the stable verified user id.
+  // Middleware order on writes: rate limit → auth → id check → body check,
+  // preserving the response precedence 429 → 401 → 400 → 404 → 403.
   const requireAuth = createRequireAuth(db);
 
   // Returns the identity the SERVER verified for the caller. The client
   // cannot influence any field of this response.
   app.get("/api/auth/me", requireAuth, (req: Request, res: Response) => {
-    res.status(200).json({
-      status: "success",
-      data: req.auth?.user,
-    });
+    sendSuccess(res, { data: req.auth?.user });
   });
 
   // Create a book. `requireAuth` establishes identity from the verified
-  // Better Auth session; ownership fields in the body are ignored.
-  app.post("/api/books", requireAuth, createCreateBook(db));
+  // Better Auth session; `validateBody` strips ownership fields from the
+  // body so they can never reach the document.
+  app.post(
+    "/api/books",
+    writeLimiter,
+    requireAuth,
+    validateBody(createBookSchema),
+    createCreateBook(db)
+  );
 
   // ── My Books (owner list) ──────────────────────────────────────────────
   // The frontend's getMyBooks() tries /api/my-books first, then falls back
@@ -81,20 +172,38 @@ const createApp = (db: Db): Express => {
   // NOTE: static sub-routes (e.g. GET /api/books/my) are registered above,
   // BEFORE this `:id` route, otherwise ":id" would swallow them.
   app.get("/api/books", createGetBooks(db));
-  app.get("/api/books/:id", createGetBookById(db));
+  app.get("/api/books/:id", validateObjectId("book"), createGetBookById(db));
 
   // ── Book update & delete (owner-only) ──────────────────────────────────
   // The assignment specifies PATCH /api/books/:id; the frontend's
   // bookService.updateBook() sends PUT. Both verbs share the same handler
   // so the API contract holds for either caller. DELETE matches the
   // frontend's bookService.deleteBook() exactly.
-  app.patch("/api/books/:id", requireAuth, createUpdateBook(db));
-  app.put("/api/books/:id", requireAuth, createUpdateBook(db));
-  app.delete("/api/books/:id", requireAuth, createDeleteBook(db));
+  const updateGuards = [
+    writeLimiter,
+    requireAuth,
+    validateObjectId("book"),
+    validateBody(updateBookSchema),
+  ] as const;
+  app.patch("/api/books/:id", ...updateGuards, createUpdateBook(db));
+  app.put("/api/books/:id", ...updateGuards, createUpdateBook(db));
+  app.delete(
+    "/api/books/:id",
+    writeLimiter,
+    requireAuth,
+    validateObjectId("book"),
+    createDeleteBook(db)
+  );
 
   // ── Borrowing & returning ──────────────────────────────────────────────
   // POST /api/borrows reserves a copy atomically and records the borrow.
-  app.post("/api/borrows", requireAuth, createBorrowBook(db));
+  app.post(
+    "/api/borrows",
+    writeLimiter,
+    requireAuth,
+    validateBody(borrowBookSchema),
+    createBorrowBook(db)
+  );
 
   // GET /api/borrows lists ONLY the verified session user's records. The
   // aliases match the frontend's getUserBorrows() fallback chain; the
@@ -108,26 +217,26 @@ const createApp = (db: Db): Express => {
   // DELETE /api/borrows/:id marks the borrow returned and restores the
   // copy exactly once. The PUT/PATCH /return aliases match the frontend's
   // preferred returnBook() paths so its first request succeeds.
-  app.delete("/api/borrows/:id", requireAuth, createReturnBook(db));
-  app.put("/api/borrows/:id/return", requireAuth, createReturnBook(db));
-  app.patch("/api/borrows/:id/return", requireAuth, createReturnBook(db));
+  const returnGuards = [writeLimiter, requireAuth] as const;
+  app.delete("/api/borrows/:id", ...returnGuards, validateObjectId("borrow"), createReturnBook(db));
+  app.put(
+    "/api/borrows/:id/return",
+    ...returnGuards,
+    validateObjectId("borrow"),
+    createReturnBook(db)
+  );
+  app.patch(
+    "/api/borrows/:id/return",
+    ...returnGuards,
+    validateObjectId("borrow"),
+    createReturnBook(db)
+  );
 
-  // 404 handler
-  app.use((req: Request, res: Response) => {
-    res.status(404).json({
-      status: "fail",
-      message: `Route ${req.method} ${req.originalUrl} not found`,
-    });
-  });
-
-  // Centralized error handler (must come after routes)
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("Unhandled error:", err.message);
-    res.status(500).json({
-      status: "error",
-      message: "Something went wrong on the server",
-    });
-  });
+  // 404 + centralized error handling (must come after routes).
+  // The error handler maps every failure onto the standard envelope and
+  // keeps stack traces / driver details out of responses.
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 };

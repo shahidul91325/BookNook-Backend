@@ -143,14 +143,50 @@ export const updateBookSchema = z
 export type CreateBookPayload = z.infer<typeof createBookSchema>;
 export type UpdateBookPayload = z.infer<typeof updateBookSchema>;
 
-/** Groups Zod issues into a `field → messages[]` map for the 400 response. */
-export const formatZodIssues = (
-  error: z.ZodError
-): Record<string, string[]> => {
-  const errors: Record<string, string[]> = {};
-  for (const issue of error.issues) {
-    const key = issue.path.length > 0 ? issue.path.join(".") : "_";
-    (errors[key] ??= []).push(issue.message);
-  }
-  return errors;
-};
+/**
+ * Query schema for GET /api/books.
+ *
+ * The catalog endpoint is deliberately LENIENT: the frontend paginates
+ * client-side and sometimes omits every parameter, and invalid values fall
+ * back to safe defaults instead of failing the request (this behavior is
+ * part of the established API contract — see scripts/verify-books.ts).
+ *
+ * Zod `.catch()` makes the parse total: any malformed value (array, object,
+ * negative number, unknown sort, missing key) resolves to the documented
+ * default, so the database can never receive an unbounded or malformed
+ * filter/sort/skip.
+ */
+
+/** Safety cap for a single page, protecting the database from unbounded scans. */
+export const MAX_BOOK_PAGE_SIZE = 500;
+
+/** Sort modes accepted from the frontend; anything else falls back to newest. */
+export const BOOK_SORT_MODES = [
+  "newest",
+  "oldest",
+  "title-asc",
+  "title-desc",
+  "quantity-desc",
+] as const;
+
+/**
+ * Query-string values arrive as a string, an array (repeated key), or an
+ * object (key[]=…). Anything that is not a plain string is treated as
+ * absent so the schema's default applies — exactly the lenient behavior
+ * the endpoint has always had.
+ */
+const singleValue = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((value) => (typeof value === "string" ? value : undefined), schema);
+
+export const listBooksQuerySchema = z.object({
+  category: singleValue(z.string().trim().catch("")),
+  search: singleValue(z.string().trim().catch("")),
+  limit: singleValue(
+    z.coerce.number().int().min(1).max(MAX_BOOK_PAGE_SIZE).catch(MAX_BOOK_PAGE_SIZE)
+  ),
+  page: singleValue(z.coerce.number().int().min(1).catch(1)),
+  sort: singleValue(z.enum(BOOK_SORT_MODES).catch("newest")),
+});
+
+/** The query shape after Zod parsing/normalization. */
+export type ListBooksQuery = z.infer<typeof listBooksQuerySchema>;

@@ -1,6 +1,9 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { Db } from "mongodb";
 import { authenticateRequest } from "../services/auth.service.js";
+import type { AuthenticatedContext } from "../types/auth.js";
+import { sendError } from "../utils/httpResponse.js";
+import { logError } from "../utils/logger.js";
 
 /**
  * Reusable authentication/authorization middleware for the BookNook API.
@@ -20,18 +23,40 @@ import { authenticateRequest } from "../services/auth.service.js";
 
 /** Sends the consistent 401 response used by every authentication failure. */
 export const sendUnauthorized = (res: Response): void => {
-  res.status(401).json({
-    status: "fail",
-    message: "Authentication required. Please sign in and try again.",
-  });
+  sendError(
+    res,
+    401,
+    "Authentication required. Please sign in and try again."
+  );
 };
 
 /** Sends the consistent 403 response used by every authorization failure. */
 export const sendForbidden = (res: Response, message?: string): void => {
-  res.status(403).json({
-    status: "fail",
-    message: message ?? "You do not have permission to perform this action.",
-  });
+  sendError(
+    res,
+    403,
+    message ?? "You do not have permission to perform this action."
+  );
+};
+
+/**
+ * Defensive guard for authenticated controllers: returns the verified
+ * context, or answers 401 and returns `null` if the route was somehow
+ * reached without `requireAuth`. Controllers use it as the FIRST step:
+ *
+ *   const auth = requireAuthContext(req, res);
+ *   if (!auth) return;
+ */
+export const requireAuthContext = (
+  req: Request,
+  res: Response
+): AuthenticatedContext | null => {
+  const auth = req.auth;
+  if (!auth) {
+    sendUnauthorized(res);
+    return null;
+  }
+  return auth;
 };
 
 /**
@@ -62,7 +87,7 @@ export const createRequireAuth =
     } catch (error) {
       // Never leak internals on the auth path; treat unexpected errors as
       // failed authentication rather than letting the request proceed.
-      console.error("Authentication middleware error:", error);
+      logError("auth", error);
       sendUnauthorized(res);
     }
   };

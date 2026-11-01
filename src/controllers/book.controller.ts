@@ -1,4 +1,4 @@
-import type { NextFunction, Request, RequestHandler, Response } from "express";
+import type { RequestHandler } from "express";
 import type { Db, ObjectId } from "mongodb";
 import { getBooksCollection, getBorrowsCollection } from "../config/collections.js";
 import {
@@ -16,16 +16,38 @@ import {
 import {
   toBookResponse,
   type BookListFilter,
-  type BookSort,
   type CreateBookInput,
 } from "../models/book.model.js";
-import { isValidObjectId, toObjectId } from "../utils/objectId.js";
-import { sendForbidden, sendUnauthorized } from "../middleware/auth.js";
+import { getRouteId } from "../utils/objectId.js";
 import {
-  createBookSchema,
-  formatZodIssues,
-  updateBookSchema,
+  isOwner,
+  requireAuthContext,
+  sendForbidden,
+} from "../middleware/auth.js";
+import { sendError, sendNotFound, sendSuccess } from "../utils/httpResponse.js";
+import {
+  listBooksQuerySchema,
+  type CreateBookPayload,
+  type UpdateBookPayload,
 } from "../validations/book.validation.js";
+
+/**
+ * Book controllers (public reads + authenticated writes).
+ *
+ * SECURITY CONTRACT (do not weaken):
+ *   - Identity always comes from `req.auth`, which the Phase 3 middleware
+ *     populated from a cryptographically verified Better Auth session.
+ *   - Request bodies are parsed by the `validateBody` route middleware,
+ *     whose Zod schemas STRIP ownership/identity fields — so `addedBy`,
+ *     `userName`, `userEmail`, timestamps, … sent by a client can never
+ *     influence what is stored. Controllers read only `CreateBookPayload`
+ *     / `UpdateBookPayload` fields.
+ *   - Ownership is decided by comparing the book's STORED `addedBy` with
+ *     the verified session user id, and the final write re-asserts
+ *     ownership inside the MongoDB query itself (defense in depth).
+ *   - Malformed ObjectIds never reach the database: the `validateObjectId`
+ *     route middleware answers 400 first.
+ */
 
 /**
  * Public book read controllers (GET /api/books, GET /api/books/:id).
@@ -35,89 +57,38 @@ import {
  * only ever READ from MongoDB; no mock or hardcoded data is involved.
  */
 
-/**
- * Safety cap for a single page, protecting the database from unbounded
- * scans. When the frontend sends no `limit` (the catalog paginates
- * client-side), we return the full catalog up to this cap.
- */
-const MAX_LIMIT = 500;
-const DEFAULT_LIMIT = MAX_LIMIT;
-
-/** Sort modes accepted from the frontend; anything else falls back to newest. */
-const SORT_MODES: readonly BookSort[] = [
-  "newest",
-  "oldest",
-  "title-asc",
-  "title-desc",
-  "quantity-desc",
-];
-
-/** Parses a positive integer query param, returning `fallback` when invalid. */
-const parsePositiveInt = (
-  raw: string | undefined,
-  fallback: number
-): number => {
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
-  return parsed;
-};
-
-/** Validates and normalizes the `sort` query param (defaults to newest). */
-const parseSort = (raw: string | undefined): BookSort => {
-  if (raw && (SORT_MODES as readonly string[]).includes(raw)) {
-    return raw as BookSort;
-  }
-  return "newest";
-};
-
 /** GET /api/books — list books with category filter, search, sort, pagination. */
 export const createGetBooks =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const query = req.query as Record<string, unknown>;
-
-      const rawCategory = typeof query.category === "string" ? query.category.trim() : "";
-      const rawSearch = typeof query.search === "string" ? query.search.trim() : "";
+      // Lenient, total parse: malformed params fall back to safe defaults
+      // (the established contract — see listBooksQuerySchema).
+      const query = listBooksQuerySchema.parse(req.query);
 
       const filter: BookListFilter = {};
-      if (rawCategory && rawCategory !== "All") {
-        filter.category = rawCategory;
+      if (query.category && query.category !== "All") {
+        filter.category = query.category;
       }
-      if (rawSearch) {
-        filter.search = rawSearch;
+      if (query.search) {
+        filter.search = query.search;
       }
-
-      const limit = Math.min(
-        parsePositiveInt(
-          typeof query.limit === "string" ? query.limit : undefined,
-          DEFAULT_LIMIT
-        ),
-        MAX_LIMIT
-      );
-      const page = parsePositiveInt(
-        typeof query.page === "string" ? query.page : undefined,
-        1
-      );
-      const sort = parseSort(typeof query.sort === "string" ? query.sort : undefined);
 
       const options: BookListOptions = {
-        skip: (page - 1) * limit,
-        limit,
-        sort,
+        skip: (query.page - 1) * query.limit,
+        limit: query.limit,
+        sort: query.sort,
       };
 
       const { books, total } = await listBooks(getBooksCollection(db), filter, options);
 
-      res.status(200).json({
-        status: "success",
+      // The frontend reads the array from the `books` key of the envelope.
+      sendSuccess(res, {
         results: books.length,
         total,
-        page,
-        limit,
-        totalPages: total === 0 ? 0 : Math.ceil(total / limit),
-        // The frontend reads the array from the `books` key of the envelope.
+        page: query.page,
+        limit: query.limit,
+        totalPages: total === 0 ? 0 : Math.ceil(total / query.limit),
         books: books.map(toBookResponse),
       });
     } catch (error) {
@@ -128,34 +99,16 @@ export const createGetBooks =
 /** GET /api/books/:id — fetch one book by its MongoDB ObjectId. */
 export const createGetBookById =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const rawId = req.params.id;
-      const id = typeof rawId === "string" ? rawId : "";
-
-      // Malformed ids are a client error, not a server crash — reject early.
-      if (!id || !isValidObjectId(id)) {
-        res.status(400).json({
-          status: "fail",
-          message: "Invalid book id. Expected a 24-character MongoDB ObjectId.",
-        });
-        return;
-      }
-
-      const book = await findBookById(getBooksCollection(db), id);
+      const book = await findBookById(getBooksCollection(db), getRouteId(req));
       if (!book) {
-        res.status(404).json({
-          status: "fail",
-          message: "Book not found.",
-        });
+        sendNotFound(res, "Book not found.");
         return;
       }
 
       // The frontend reads the book from the `data` key of the envelope.
-      res.status(200).json({
-        status: "success",
-        data: toBookResponse(book),
-      });
+      sendSuccess(res, { data: toBookResponse(book) });
     } catch (error) {
       next(error);
     }
@@ -165,34 +118,19 @@ export const createGetBookById =
  * POST /api/books — create a book (requires verified authentication).
  *
  * Ownership (`addedBy` / `addedByName` / `addedByEmail`) is taken
- * EXCLUSIVELY from `req.auth`, which the Phase 3 middleware populated by
- * cryptographically verifying the Better Auth session. Anything ownership-
- * related in the request body (`userName`, `userEmail`, `addedBy`, …) is
- * stripped by the Zod schema and can never influence the stored document.
+ * EXCLUSIVELY from `req.auth`; anything ownership-related in the request
+ * body was already stripped by the Zod schema in `validateBody`.
  */
 export const createCreateBook =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
       // `requireAuth` runs first; this is a defensive guard so identity is
       // never inferred from the request if the middleware chain changed.
-      const auth = req.auth;
-      if (!auth) {
-        sendUnauthorized(res);
-        return;
-      }
+      const auth = requireAuthContext(req, res);
+      if (!auth) return;
 
-      const parsed = createBookSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({
-          status: "fail",
-          message: "Validation failed. Please fix the highlighted fields.",
-          errors: formatZodIssues(parsed.error),
-        });
-        return;
-      }
-
-      const payload = parsed.data;
+      const payload = req.body as CreateBookPayload;
 
       // Server-derived book document: ownership comes from the verified
       // session, timestamps are generated here, and both copy counters
@@ -214,21 +152,15 @@ export const createCreateBook =
       const book = await insertBook(getBooksCollection(db), input);
 
       // 201 Created + the same `data` envelope the details endpoint returns.
-      res.status(201).json({
-        status: "success",
-        message: "Book added to the library.",
-        data: toBookResponse(book),
-      });
+      sendSuccess(
+        res,
+        { message: "Book added to the library.", data: toBookResponse(book) },
+        201
+      );
     } catch (error) {
       next(error);
     }
   };
-
-/** Extracts the raw `:id` route param as a string (Express 5 types). */
-const getRouteId = (req: Request): string => {
-  const rawId = req.params.id;
-  return typeof rawId === "string" ? rawId : "";
-};
 
 /**
  * Shared core for PATCH/PUT /api/books/:id — update a book the caller owns.
@@ -236,52 +168,32 @@ const getRouteId = (req: Request): string => {
  * Ownership is decided by comparing the book's stored `addedBy` (the
  * verified user id written at creation time) with `req.auth.user.id` from
  * the cryptographically verified session. Client-supplied identity fields
- * in the body are stripped by the Zod schema and can never reassign the
+ * in the body were stripped by the Zod schema and can never reassign the
  * book. Only fields present in the body are written; everything else is
  * preserved untouched, and `updatedAt` is refreshed server-side.
  */
 const handleUpdateBook =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const auth = req.auth;
-      if (!auth) {
-        sendUnauthorized(res);
-        return;
-      }
+      const auth = requireAuthContext(req, res);
+      if (!auth) return;
 
       const id = getRouteId(req);
-      if (!id || !isValidObjectId(id)) {
-        res.status(400).json({
-          status: "fail",
-          message: "Invalid book id. Expected a 24-character MongoDB ObjectId.",
-        });
-        return;
-      }
 
       const book = await findBookById(getBooksCollection(db), id);
       if (!book) {
-        res.status(404).json({ status: "fail", message: "Book not found." });
+        sendNotFound(res, "Book not found.");
         return;
       }
 
       // Only the original owner (matched by verified user id) may update.
-      if (book.addedBy !== auth.user.id) {
+      if (!isOwner(req, book.addedBy)) {
         sendForbidden(res, "You can only edit books you have added.");
         return;
       }
 
-      const parsed = updateBookSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({
-          status: "fail",
-          message: "Validation failed. Please fix the highlighted fields.",
-          errors: formatZodIssues(parsed.error),
-        });
-        return;
-      }
-
-      const payload = parsed.data;
+      const payload = req.body as UpdateBookPayload;
 
       // Build the $set document from PROVIDED fields only — omitted fields
       // stay as they are. Ownership fields are impossible here: the Zod
@@ -313,12 +225,11 @@ const handleUpdateBook =
         update
       );
       if (!updated) {
-        res.status(404).json({ status: "fail", message: "Book not found." });
+        sendNotFound(res, "Book not found.");
         return;
       }
 
-      res.status(200).json({
-        status: "success",
+      sendSuccess(res, {
         message: "Book updated successfully.",
         data: toBookResponse(updated),
       });
@@ -341,31 +252,21 @@ export const createUpdateBook = (db: Db): RequestHandler => handleUpdateBook(db)
  */
 export const createDeleteBook =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const auth = req.auth;
-      if (!auth) {
-        sendUnauthorized(res);
-        return;
-      }
+      const auth = requireAuthContext(req, res);
+      if (!auth) return;
 
       const id = getRouteId(req);
-      if (!id || !isValidObjectId(id)) {
-        res.status(400).json({
-          status: "fail",
-          message: "Invalid book id. Expected a 24-character MongoDB ObjectId.",
-        });
-        return;
-      }
 
       const book = await findBookById(getBooksCollection(db), id);
       if (!book) {
-        res.status(404).json({ status: "fail", message: "Book not found." });
+        sendNotFound(res, "Book not found.");
         return;
       }
 
       // Only the original owner (matched by verified user id) may delete.
-      if (book.addedBy !== auth.user.id) {
+      if (!isOwner(req, book.addedBy)) {
         sendForbidden(res, "You can only delete books you have added.");
         return;
       }
@@ -377,13 +278,13 @@ export const createDeleteBook =
         book._id as ObjectId
       );
       if (activeBorrows > 0) {
-        res.status(409).json({
-          status: "fail",
-          message:
-            `This book cannot be deleted: ${activeBorrows} active borrow ` +
+        sendError(
+          res,
+          409,
+          `This book cannot be deleted: ${activeBorrows} active borrow ` +
             "record(s) still reference it. Collect the book(s) and mark " +
-            "the borrows as returned first.",
-        });
+            "the borrows as returned first."
+        );
         return;
       }
 
@@ -394,7 +295,7 @@ export const createDeleteBook =
         auth.user.id
       );
       if (!deleted) {
-        res.status(404).json({ status: "fail", message: "Book not found." });
+        sendNotFound(res, "Book not found.");
         return;
       }
 
@@ -405,8 +306,7 @@ export const createDeleteBook =
         book._id as ObjectId
       );
 
-      res.status(200).json({
-        status: "success",
+      sendSuccess(res, {
         // The frontend's deleteBook() reads `success` / `message` directly.
         success: true,
         message: "Book deleted successfully.",
@@ -427,13 +327,10 @@ export const createDeleteBook =
  */
 export const createGetMyBooks =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const auth = req.auth;
-      if (!auth) {
-        sendUnauthorized(res);
-        return;
-      }
+      const auth = requireAuthContext(req, res);
+      if (!auth) return;
 
       const { books, total } = await listBooks(
         getBooksCollection(db),
@@ -441,8 +338,7 @@ export const createGetMyBooks =
         { sort: "newest" }
       );
 
-      res.status(200).json({
-        status: "success",
+      sendSuccess(res, {
         results: books.length,
         total,
         books: books.map(toBookResponse),

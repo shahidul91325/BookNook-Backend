@@ -1,6 +1,5 @@
-import type { NextFunction, Request, RequestHandler, Response } from "express";
+import type { RequestHandler } from "express";
 import type { Db, ObjectId } from "mongodb";
-import { MongoServerError } from "mongodb";
 import { getBooksCollection, getBorrowsCollection } from "../config/collections.js";
 import {
   findBookById,
@@ -17,17 +16,27 @@ import {
   toBorrowResponse,
   type CreateBorrowInput,
 } from "../models/borrow.model.js";
-import { isValidObjectId, toObjectId } from "../utils/objectId.js";
-import { sendUnauthorized } from "../middleware/auth.js";
-import { borrowBookSchema } from "../validations/borrow.validation.js";
-import {
-  OperationError,
-  runWithTransactionOrFallback,
-} from "../utils/transaction.js";
+import { getRouteId } from "../utils/objectId.js";
+import { isOwner, requireAuthContext, sendForbidden } from "../middleware/auth.js";
+import { sendError, sendNotFound, sendSuccess } from "../utils/httpResponse.js";
+import type { BorrowBookPayload } from "../validations/borrow.validation.js";
+import { OperationError } from "../utils/errors.js";
+import { runWithTransactionOrFallback } from "../utils/transaction.js";
 
 /**
  * Borrow & return controllers (POST /api/borrows, GET /api/borrows,
  * DELETE /api/borrows/:id).
+ *
+ * SECURITY CONTRACT (do not weaken):
+ *   - Identity always comes from the verified session (`req.auth`); the
+ *     request body's `bookTitle` / `bookImage` / `userName` / `userEmail`
+ *     were stripped by the Zod schema in `validateBody`. The book's
+ *     title/image are read from the MongoDB document the server fetched.
+ *   - A borrow record can only be returned by the user it belongs to
+ *     (`isOwner` against the record's stored `userId`).
+ *   - Domain failures (`OperationError`) and MongoDB duplicate-key errors
+ *     propagate to the centralized error handler, which maps them to the
+ *     standard 409/500 envelopes — no driver internals ever leave here.
  *
  * Inventory safety strategy (works on BOTH replica sets and standalone
  * mongods):
@@ -44,72 +53,38 @@ import {
  *     restored exactly once, clamped at totalCopies.
  */
 
-/** Maps domain/Mongo errors to consistent client responses. */
-const respondError = (res: Response, error: unknown): boolean => {
-  if (error instanceof OperationError) {
-    res.status(error.statusCode).json({ status: "fail", message: error.message });
-    return true;
-  }
-  // Partial unique index violation: {userId, bookId} already borrowed.
-  if ((error as MongoServerError)?.code === 11000) {
-    res.status(409).json({
-      status: "fail",
-      message: "You already have this book borrowed. Return it before borrowing again.",
-    });
-    return true;
-  }
-  return false;
-};
-
 /**
  * POST /api/borrows — borrow a book (requires verified authentication).
- *
- * Identity comes exclusively from the verified session; the book's
- * title/image are read from the MongoDB document the server fetched —
- * never from the request body (Zod strips those keys).
  */
 export const createBorrowBook =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const auth = req.auth;
-      if (!auth) {
-        sendUnauthorized(res);
-        return;
-      }
+      const auth = requireAuthContext(req, res);
+      if (!auth) return;
 
-      const parsed = borrowBookSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({
-          status: "fail",
-          message: "Validation failed. Please fix the highlighted fields.",
-          errors: Object.fromEntries(
-            parsed.error.issues.map((i) => [i.path.join(".") || "_", [i.message]])
-          ),
-        });
-        return;
-      }
-
-      const { bookId, returnDate } = parsed.data;
+      const { bookId, returnDate } = req.body as BorrowBookPayload;
 
       const book = await findBookById(getBooksCollection(db), bookId);
       if (!book) {
-        res.status(404).json({ status: "fail", message: "Book not found." });
+        sendNotFound(res, "Book not found.");
         return;
       }
 
       // Fast-path duplicate check (friendly message); the unique partial
-      // index still guards the concurrent race.
+      // index still guards the concurrent race (its E11000 becomes a 409
+      // in the centralized error handler).
       const alreadyBorrowed = await getBorrowsCollection(db).findOne({
         userId: auth.user.id,
         bookId: book._id as ObjectId,
         status: "borrowed",
       });
       if (alreadyBorrowed) {
-        res.status(409).json({
-          status: "fail",
-          message: "You already have this book borrowed. Return it before borrowing again.",
-        });
+        sendError(
+          res,
+          409,
+          "You already have this book borrowed. Return it before borrowing again."
+        );
         return;
       }
 
@@ -125,54 +100,50 @@ export const createBorrowBook =
         ...(returnDate ? { returnDate } : {}),
       };
 
-      let borrow;
-      try {
-        borrow = await runWithTransactionOrFallback(
-          db,
-          // Replica set: reserve + insert inside one transaction — any
-          // failure auto-rolls-back the reserved copy.
-          async (session) => {
-            const reserved = await reserveOneCopy(
-              getBooksCollection(db),
-              bookId,
-              session
+      // `OperationError`s (e.g. no copies left) and duplicate-key races
+      // bubble up to the centralized error handler.
+      const borrow = await runWithTransactionOrFallback(
+        db,
+        // Replica set: reserve + insert inside one transaction — any
+        // failure auto-rolls-back the reserved copy.
+        async (session) => {
+          const reserved = await reserveOneCopy(
+            getBooksCollection(db),
+            bookId,
+            session
+          );
+          if (!reserved) {
+            throw new OperationError(
+              409,
+              "No copies of this book are currently available."
             );
-            if (!reserved) {
-              throw new OperationError(
-                409,
-                "No copies of this book are currently available."
-              );
-            }
-            return insertBorrow(getBorrowsCollection(db), input, session);
-          },
-          // Standalone: atomic conditional reserve + manual compensation.
-          async () => {
-            const reserved = await reserveOneCopy(getBooksCollection(db), bookId);
-            if (!reserved) {
-              throw new OperationError(
-                409,
-                "No copies of this book are currently available."
-              );
-            }
-            try {
-              return await insertBorrow(getBorrowsCollection(db), input);
-            } catch (insertError) {
-              // Undo the reservation so inventory stays consistent.
-              await releaseOneCopy(getBooksCollection(db), bookId);
-              throw insertError;
-            }
           }
-        );
-      } catch (error) {
-        if (respondError(res, error)) return;
-        throw error;
-      }
+          return insertBorrow(getBorrowsCollection(db), input, session);
+        },
+        // Standalone: atomic conditional reserve + manual compensation.
+        async () => {
+          const reserved = await reserveOneCopy(getBooksCollection(db), bookId);
+          if (!reserved) {
+            throw new OperationError(
+              409,
+              "No copies of this book are currently available."
+            );
+          }
+          try {
+            return await insertBorrow(getBorrowsCollection(db), input);
+          } catch (insertError) {
+            // Undo the reservation so inventory stays consistent.
+            await releaseOneCopy(getBooksCollection(db), bookId);
+            throw insertError;
+          }
+        }
+      );
 
-      res.status(201).json({
-        status: "success",
-        message: "Book borrowed successfully.",
-        data: toBorrowResponse(borrow),
-      });
+      sendSuccess(
+        res,
+        { message: "Book borrowed successfully.", data: toBorrowResponse(borrow) },
+        201
+      );
     } catch (error) {
       next(error);
     }
@@ -187,13 +158,10 @@ export const createBorrowBook =
  */
 export const createGetMyBorrows =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const auth = req.auth;
-      if (!auth) {
-        sendUnauthorized(res);
-        return;
-      }
+      const auth = requireAuthContext(req, res);
+      if (!auth) return;
 
       const { borrows, total } = await listBorrowsByUser(
         getBorrowsCollection(db),
@@ -202,8 +170,7 @@ export const createGetMyBorrows =
       );
 
       // `data` key: the frontend's unwrapData() reads the array from there.
-      res.status(200).json({
-        status: "success",
+      sendSuccess(res, {
         results: borrows.length,
         total,
         data: borrows.map(toBorrowResponse),
@@ -223,87 +190,66 @@ export const createGetMyBorrows =
  */
 export const createReturnBook =
   (db: Db): RequestHandler =>
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req, res, next): Promise<void> => {
     try {
-      const auth = req.auth;
-      if (!auth) {
-        sendUnauthorized(res);
-        return;
-      }
+      const auth = requireAuthContext(req, res);
+      if (!auth) return;
 
-      const rawId = req.params.id;
-      const id = typeof rawId === "string" ? rawId : "";
-      if (!id || !isValidObjectId(id)) {
-        res.status(400).json({
-          status: "fail",
-          message: "Invalid borrow id. Expected a 24-character MongoDB ObjectId.",
-        });
-        return;
-      }
+      const id = getRouteId(req);
 
       const record = await findBorrowById(getBorrowsCollection(db), id);
       if (!record) {
-        res.status(404).json({ status: "fail", message: "Borrow record not found." });
+        sendNotFound(res, "Borrow record not found.");
         return;
       }
 
       // Only the borrower may return their own record.
-      if (record.userId !== auth.user.id) {
-        res.status(403).json({
-          status: "fail",
-          message: "You can only return books you have borrowed.",
-        });
+      if (!isOwner(req, record.userId)) {
+        sendForbidden(res, "You can only return books you have borrowed.");
         return;
       }
 
       // Duplicate return guard (the atomic flip below also enforces this).
       if (record.status === "returned") {
-        res.status(409).json({
-          status: "fail",
-          message: "This book has already been returned.",
-        });
+        sendError(res, 409, "This book has already been returned.");
         return;
       }
 
       const bookId = (record.bookId as ObjectId).toString();
 
-      try {
-        await runWithTransactionOrFallback(
-          db,
-          // Replica set: flip + inventory restore in one transaction.
-          async (session) => {
-            const flipped = await markBorrowReturned(
-              getBorrowsCollection(db),
-              id,
-              session
+      // `OperationError`s (e.g. already returned by a concurrent request)
+      // bubble up to the centralized error handler → 409.
+      await runWithTransactionOrFallback(
+        db,
+        // Replica set: flip + inventory restore in one transaction.
+        async (session) => {
+          const flipped = await markBorrowReturned(
+            getBorrowsCollection(db),
+            id,
+            session
+          );
+          if (!flipped) {
+            throw new OperationError(
+              409,
+              "This book has already been returned."
             );
-            if (!flipped) {
-              throw new OperationError(
-                409,
-                "This book has already been returned."
-              );
-            }
-            await releaseOneCopy(getBooksCollection(db), bookId, session);
-          },
-          // Standalone: atomic flip as the exactly-once gate, then restore.
-          async () => {
-            const flipped = await markBorrowReturned(getBorrowsCollection(db), id);
-            if (!flipped) {
-              throw new OperationError(
-                409,
-                "This book has already been returned."
-              );
-            }
-            await releaseOneCopy(getBooksCollection(db), bookId);
           }
-        );
-      } catch (error) {
-        if (respondError(res, error)) return;
-        throw error;
-      }
+          await releaseOneCopy(getBooksCollection(db), bookId, session);
+        },
+        // Standalone: atomic flip as the exactly-once gate, then restore.
+        async () => {
+          const flipped = await markBorrowReturned(getBorrowsCollection(db), id);
+          if (!flipped) {
+            throw new OperationError(
+              409,
+              "This book has already been returned."
+            );
+          }
+          await releaseOneCopy(getBooksCollection(db), bookId);
+        }
+      );
 
-      res.status(200).json({
-        status: "success",
+      sendSuccess(res, {
         // The frontend's returnBook() reads `success` / `message` directly.
         success: true,
         message: "Book returned successfully.",

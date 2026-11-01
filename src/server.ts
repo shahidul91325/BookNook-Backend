@@ -2,6 +2,7 @@ import createApp from "./app.js";
 import { connectDB, closeDB } from "./config/db.js";
 import { ensureIndexes } from "./config/indexes.js";
 import { env } from "./config/env.js";
+import { logError, logInfo } from "./utils/logger.js";
 
 const startServer = async (): Promise<void> => {
   try {
@@ -11,13 +12,13 @@ const startServer = async (): Promise<void> => {
     const app = createApp(db);
 
     const server = app.listen(env.PORT, () => {
-      console.log(
+      logInfo(
         `🚀 Server running on http://localhost:${env.PORT} (${env.NODE_ENV})`
       );
     });
 
     const shutdown = (signal: string) => {
-      console.log(`${signal} received. Shutting down...`);
+      logInfo(`${signal} received. Shutting down...`);
       server.close(() => {
         void closeDB().finally(() => process.exit(0));
       });
@@ -26,8 +27,9 @@ const startServer = async (): Promise<void> => {
     process.on("SIGINT", () => shutdown("SIGINT"));
     process.on("SIGTERM", () => shutdown("SIGTERM"));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.error(`❌ Failed to start server: ${message}`);
+    // Startup failures can embed connection strings — log through the
+    // scrubber so credentials never end up in log files.
+    logError("startup", error);
     await closeDB();
     process.exit(1);
   }
