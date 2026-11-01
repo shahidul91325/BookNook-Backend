@@ -8,6 +8,7 @@ import cors, { type CorsOptions } from "cors";
 import type { Db } from "mongodb";
 import { env } from "./config/env.js";
 import { createRequireAuth } from "./middleware/auth.js";
+import { createGetBooks, createGetBookById } from "./controllers/book.controller.js";
 
 const createApp = (db: Db): Express => {
   const app = express();
@@ -29,6 +30,14 @@ const createApp = (db: Db): Express => {
       timestamp: new Date().toISOString(),
     });
   });
+
+  // ── Public book read APIs ───────────────────────────────────────────────
+  // Assignment requirement: catalog + details stay publicly readable.
+  // NOTE for future phases: register any static sub-routes (e.g.
+  // GET /api/books/my, GET /api/books/user/:email) BEFORE the `:id` route
+  // below, otherwise `:id` would swallow them.
+  app.get("/api/books", createGetBooks(db));
+  app.get("/api/books/:id", createGetBookById(db));
 
   // ── Protected routes ────────────────────────────────────────────────────
   // Every private route goes through `requireAuth`, which only trusts a

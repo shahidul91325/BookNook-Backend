@@ -2,16 +2,38 @@ import {
   ObjectId,
   type Collection,
   type Filter,
+  type Sort,
   type UpdateFilter,
 } from "mongodb";
-import type { Book, BookListFilter, CreateBookInput } from "../models/book.model.js";
+import type {
+  Book,
+  BookListFilter,
+  BookSort,
+  CreateBookInput,
+} from "../models/book.model.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { toObjectId } from "../utils/objectId.js";
 
 export type BookListOptions = {
   skip?: number;
   limit?: number;
+  /** Sort mode; defaults to `newest` (createdAt descending). */
+  sort?: BookSort;
 };
+
+/** Case-insensitive ordering for title sorts (A→Z regardless of casing). */
+const TITLE_COLLATION = { locale: "en", strength: 2 } as const;
+
+const SORT_SPECIFIERS: Record<BookSort, Sort> = {
+  newest: { createdAt: -1 },
+  oldest: { createdAt: 1 },
+  "title-asc": { title: 1 },
+  "title-desc": { title: -1 },
+  "quantity-desc": { totalCopies: -1 },
+};
+
+const getSortSpecifier = (sort?: BookSort): Sort =>
+  SORT_SPECIFIERS[sort ?? "newest"] ?? SORT_SPECIFIERS.newest;
 
 const buildBookFilter = (filter: BookListFilter): Filter<Book> => {
   const query: Filter<Book> = {};
@@ -47,16 +69,18 @@ export const listBooks = async (
   options: BookListOptions = {}
 ): Promise<{ books: Book[]; total: number }> => {
   const query = buildBookFilter(filter);
-  const { skip = 0, limit = 20 } = options;
+  const { skip = 0, limit = 20, sort } = options;
+  const usesTitleCollation = sort === "title-asc" || sort === "title-desc";
+
+  const findCursor = books.find(query);
+  if (usesTitleCollation) findCursor.collation(TITLE_COLLATION);
 
   const [items, total] = await Promise.all([
-    books
-      .find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray(),
-    books.countDocuments(query),
+    findCursor.sort(getSortSpecifier(sort)).skip(skip).limit(limit).toArray(),
+    books.countDocuments(
+      query,
+      usesTitleCollation ? { collation: TITLE_COLLATION } : undefined
+    ),
   ]);
 
   return { books: items, total };

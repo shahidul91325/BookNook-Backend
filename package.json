@@ -8,6 +8,7 @@
     "build": "tsc",
     "verify:models": "tsx scripts/verify-data-models.ts",
     "verify:auth": "tsx scripts/verify-auth.ts",
+    "verify:books": "tsx scripts/verify-books.ts",
     "start": "node dist/server.js"
   },
   "keywords": [],
