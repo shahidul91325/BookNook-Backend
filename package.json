@@ -7,6 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "verify:models": "tsx scripts/verify-data-models.ts",
+    "verify:auth": "tsx scripts/verify-auth.ts",
     "start": "node dist/server.js"
   },
   "keywords": [],

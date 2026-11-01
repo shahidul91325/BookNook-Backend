@@ -10,7 +10,15 @@ export interface EnvConfig {
   NODE_ENV: "development" | "production" | "test";
   PORT: number;
   MONGODB_URI: string;
+  /** Database name shared with the Next.js frontend (Better Auth collections live here). */
+  DB_NAME: string;
   CORS_ORIGIN: string;
+  /**
+   * The Better Auth signing secret — MUST be byte-identical to the
+   * `BETTER_AUTH_SECRET` used by the frontend, because session cookies
+   * are HMAC-SHA256 signed with it.
+   */
+  BETTER_AUTH_SECRET: string;
 }
 
 const missing: string[] = [];
@@ -33,7 +41,20 @@ if (!mongodbUri) {
   missing.push("MONGODB_URI");
 }
 
-const corsOrigin = process.env.CORS_ORIGIN ?? "http://localhost:3000";
+const dbName = process.env.DB_NAME ?? "booknook";
+
+const betterAuthSecret = process.env.BETTER_AUTH_SECRET;
+if (!betterAuthSecret) {
+  missing.push("BETTER_AUTH_SECRET");
+} else if (betterAuthSecret.length < 32) {
+  throw new Error(
+    "BETTER_AUTH_SECRET must be at least 32 characters long. " +
+      "Use the exact same secret as the frontend (BETTER_AUTH_SECRET in the Next.js .env.local)."
+  );
+}
+
+const corsOrigin =
+  process.env.CORS_ORIGIN ?? process.env.FRONTEND_URL ?? "http://localhost:3000";
 
 if (missing.length > 0) {
   // Fail fast and safely: never print secret values, only missing key names.
@@ -47,5 +68,7 @@ export const env: EnvConfig = {
   NODE_ENV: nodeEnvRaw,
   PORT: port,
   MONGODB_URI: mongodbUri as string,
+  DB_NAME: dbName,
   CORS_ORIGIN: corsOrigin,
+  BETTER_AUTH_SECRET: betterAuthSecret as string,
 };

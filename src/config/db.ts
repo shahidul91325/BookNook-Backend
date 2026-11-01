@@ -12,7 +12,7 @@ export const connectDB = async (): Promise<Db> => {
     await client.connect();
     console.log("✅ MongoDB Atlas connected");
   }
-  return client.db();
+  return client.db(env.DB_NAME);
 };
 
 export const closeDB = async (): Promise<void> => {

@@ -8,7 +8,7 @@ const startServer = async (): Promise<void> => {
     const db = await connectDB();
     await ensureIndexes(db);
 
-    const app = createApp();
+    const app = createApp(db);
 
     const server = app.listen(env.PORT, () => {
       console.log(

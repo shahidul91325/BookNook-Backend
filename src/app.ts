@@ -5,9 +5,11 @@ import express, {
   type Response,
 } from "express";
 import cors, { type CorsOptions } from "cors";
+import type { Db } from "mongodb";
 import { env } from "./config/env.js";
+import { createRequireAuth } from "./middleware/auth.js";
 
-const createApp = (): Express => {
+const createApp = (db: Db): Express => {
   const app = express();
 
   // CORS — allow only the Next.js frontend origin
@@ -25,6 +27,21 @@ const createApp = (): Express => {
       message: "BookNook API is running",
       environment: env.NODE_ENV,
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  // ── Protected routes ────────────────────────────────────────────────────
+  // Every private route goes through `requireAuth`, which only trusts a
+  // cryptographically verified Better Auth session — never client-supplied
+  // identity fields. `req.auth.user.id` is the stable verified user id.
+  const requireAuth = createRequireAuth(db);
+
+  // Returns the identity the SERVER verified for the caller. The client
+  // cannot influence any field of this response.
+  app.get("/api/auth/me", requireAuth, (req: Request, res: Response) => {
+    res.status(200).json({
+      status: "success",
+      data: req.auth?.user,
     });
   });
 
