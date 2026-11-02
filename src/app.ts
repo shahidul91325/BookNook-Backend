@@ -119,12 +119,31 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   });
   app.use(globalLimiter);
 
-  // Health check
+  // Health check — root path (no auth, no DB required)
+  app.get("/", (_req: Request, res: Response) => {
+    sendSuccess(res, {
+      message: "BookNook API is running",
+      environment: env.NODE_ENV,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Health check — /api/health (no auth, no DB required)
   app.get("/api/health", (_req: Request, res: Response) => {
     sendSuccess(res, {
       message: "BookNook API is running",
       environment: env.NODE_ENV,
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  // ── Public testimonials ────────────────────────────────────────────────
+  // Public read endpoint expected by the frontend. Returns an empty list
+  // when no testimonials are configured — no auth, no DB required.
+  app.get("/api/testimonials", (_req: Request, res: Response) => {
+    sendSuccess(res, {
+      results: 0,
+      testimonials: [],
     });
   });
 
