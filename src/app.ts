@@ -117,11 +117,11 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
       timestamp: new Date().toISOString(),
     });
   });
-  if (process.env.NODE_ENV !== 'production') {
-    app.listen(process.env.PORT || 5000, () => {
-      console.log('Server running on port 5000');
-    });
-  }
+  // Note: `createApp` never calls `app.listen()`. Listening is the
+  // responsibility of `src/server.ts` (persistent dev/production server).
+  // The Vercel serverless entry point (`src/api/index.ts`) invokes the
+  // returned Express app directly as a request handler — no listening
+  // socket is ever opened in a serverless function.
   // Health check — /api/health (no auth, no DB required)
   app.get('/api/health', (_req: Request, res: Response) => {
     sendSuccess(res, {

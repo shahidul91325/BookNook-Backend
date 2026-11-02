@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { logError, logInfo } from "../utils/logger.js";
 import createApp from "../app.js";
 import { connectDB } from "../config/db.js";
+import { ensureIndexes } from "../config/indexes.js";
 
 /**
  * Vercel serverless entry point for the BookNook Express API.
@@ -21,10 +22,17 @@ import { connectDB } from "../config/db.js";
  * when the database is slow or temporarily unavailable.
  */
 
-/** Max time (ms) to wait for app initialisation before answering 503.
- *  Set below Vercel's default 10s function timeout so we always send a
- *  response before the edge cuts the connection. */
-const INIT_TIMEOUT_MS = 8_000;
+/** Latest point (ms since invocation start) by which we must have sent
+ *  a response. Staying inside Vercel's 10s function timeout means the
+ *  edge never cuts the connection — so a slow database can never surface
+ *  as a 504 Gateway Timeout; we answer 503 with JSON instead. */
+const RESPOND_BY_MS = 9_500;
+
+let invocationStart = 0;
+
+/** Milliseconds left before we must have answered the client. */
+const timeRemaining = (): number =>
+  Math.max(500, RESPOND_BY_MS - (Date.now() - invocationStart));
 
 /** Paths that do not require MongoDB and can be answered immediately.
  *  These respond with static data without touching the database, so they
@@ -43,7 +51,13 @@ let appPromise: Promise<Express> | null = null;
 const getApp = async (): Promise<Express> => {
   if (!appPromise) {
     appPromise = connectDB()
-      .then((db) => createApp(db))
+      .then(async (db) => {
+        // Ensure collections/indexes exist (idempotent) so a fresh
+        // serverless deployment is fully functional without a separate
+        // setup step.
+        await ensureIndexes(db);
+        return createApp(db);
+      })
       .catch((error) => {
         // Reset so the next invocation can retry instead of re-throwing a
         // cached rejection forever.
@@ -82,6 +96,7 @@ export default async function handler(
   res: ServerResponse
 ): Promise<void> {
   const url = req.url ?? "";
+  invocationStart = Date.now();
 
   // ── Fast path: static answers immediately, no MongoDB needed ───────────
   const fastPath = FAST_PATHS[url];
@@ -94,8 +109,19 @@ export default async function handler(
   // ── All other routes require MongoDB-backed Express app ─────────────────
   try {
     logInfo(`request: ${url}`);
-    const app = await withTimeout(getApp(), INIT_TIMEOUT_MS);
-    app(req as Request, res as Response);
+    const app = await withTimeout(getApp(), timeRemaining());
+
+    // Bound the entire request so a slow database operation can never hang
+    // the function until Vercel's edge cutoff (a 504). We always answer.
+    await withTimeout(
+      new Promise<void>((resolve, reject) => {
+        app(req as Request, res as Response);
+        res.on("finish", resolve);
+        res.on("close", () => resolve());
+        res.on("error", reject);
+      }),
+      timeRemaining()
+    );
   } catch (error) {
     // Always answer the client — an indefinite hang is worse than a 503.
     // Use native http.ServerResponse methods because Express never patched
