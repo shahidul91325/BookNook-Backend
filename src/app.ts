@@ -1,15 +1,12 @@
-import express, { type Express, type Request, type Response } from "express";
-import cors, { type CorsOptions } from "cors";
-import type { Db } from "mongodb";
-import { env } from "./config/env.js";
-import { createRequireAuth } from "./middleware/auth.js";
-import { validateBody, validateObjectId } from "./middleware/validate.js";
-import {
-  createRateLimit,
-  type RateLimitOptions,
-} from "./middleware/rateLimit.js";
-import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
-import { sendSuccess } from "./utils/httpResponse.js";
+import express, { type Express, type Request, type Response } from 'express';
+import cors, { type CorsOptions } from 'cors';
+import type { Db } from 'mongodb';
+import { env } from './config/env.js';
+import { createRequireAuth } from './middleware/auth.js';
+import { validateBody, validateObjectId } from './middleware/validate.js';
+import { createRateLimit, type RateLimitOptions } from './middleware/rateLimit.js';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { sendSuccess } from './utils/httpResponse.js';
 import {
   createCreateBook,
   createDeleteBook,
@@ -17,17 +14,10 @@ import {
   createGetBookById,
   createGetMyBooks,
   createUpdateBook,
-} from "./controllers/book.controller.js";
-import {
-  createBorrowBook,
-  createGetMyBorrows,
-  createReturnBook,
-} from "./controllers/borrow.controller.js";
-import {
-  createBookSchema,
-  updateBookSchema,
-} from "./validations/book.validation.js";
-import { borrowBookSchema } from "./validations/borrow.validation.js";
+} from './controllers/book.controller.js';
+import { createBorrowBook, createGetMyBorrows, createReturnBook } from './controllers/borrow.controller.js';
+import { createBookSchema, updateBookSchema } from './validations/book.validation.js';
+import { borrowBookSchema } from './validations/borrow.validation.js';
 
 /**
  * Hardening options for `createApp` — mainly used by verification scripts
@@ -36,8 +26,8 @@ import { borrowBookSchema } from "./validations/borrow.validation.js";
  */
 export type AppOptions = {
   rateLimit?: {
-    global?: Partial<Omit<RateLimitOptions, "scope">>;
-    write?: Partial<Omit<RateLimitOptions, "scope">>;
+    global?: Partial<Omit<RateLimitOptions, 'scope'>>;
+    write?: Partial<Omit<RateLimitOptions, 'scope'>>;
   };
 };
 
@@ -46,7 +36,7 @@ export type AppOptions = {
  * schemas cap every string field), so half a megabyte is already very
  * generous — anything larger is rejected with 413 before parsing.
  */
-const JSON_BODY_LIMIT = "512kb";
+const JSON_BODY_LIMIT = '512kb';
 
 /**
  * Minimal API security headers (no extra dependency needed).
@@ -57,11 +47,11 @@ const JSON_BODY_LIMIT = "512kb";
  *     (borrows, emails); they must never be cached by proxies/browsers.
  */
 const applySecurityHeaders = (req: Request, res: Response, next: () => void) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  if (req.path.startsWith("/api")) {
-    res.setHeader("Cache-Control", "no-store");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  if (req.path.startsWith('/api')) {
+    res.setHeader('Cache-Control', 'no-store');
   }
   next();
 };
@@ -73,10 +63,10 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   // rate limiting sees real client IPs (see TRUST_PROXY in .env.example —
   // enabling it on a directly-exposed server would let clients spoof IPs).
   if (env.TRUST_PROXY > 0) {
-    app.set("trust proxy", env.TRUST_PROXY);
+    app.set('trust proxy', env.TRUST_PROXY);
   }
   // Do not advertise the framework in the X-Powered-By header.
-  app.disable("x-powered-by");
+  app.disable('x-powered-by');
 
   // ── CORS ────────────────────────────────────────────────────────────────
   // Allowlist only: `env.CORS_ORIGINS` holds EXACT origins parsed (and
@@ -89,7 +79,7 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   const corsOptions: CorsOptions = {
     origin: env.CORS_ORIGINS,
     credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     optionsSuccessStatus: 204,
     maxAge: 600,
   };
@@ -106,13 +96,13 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   // return) — the sensitive operations an attacker would abuse. Both run
   // BEFORE authentication so hammering cannot drive session lookups.
   const globalLimiter = createRateLimit({
-    scope: "global",
+    scope: 'global',
     windowMs: env.RATE_LIMIT_WINDOW_MS,
     max: env.RATE_LIMIT_MAX,
     ...options.rateLimit?.global,
   });
   const writeLimiter = createRateLimit({
-    scope: "write",
+    scope: 'write',
     windowMs: env.RATE_LIMIT_WINDOW_MS,
     max: env.RATE_LIMIT_WRITE_MAX,
     ...options.rateLimit?.write,
@@ -120,18 +110,22 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   app.use(globalLimiter);
 
   // Health check — root path (no auth, no DB required)
-  app.get("/", (_req: Request, res: Response) => {
+  app.get('/', (_req: Request, res: Response) => {
     sendSuccess(res, {
-      message: "BookNook API is running",
+      message: 'BookNook API is running',
       environment: env.NODE_ENV,
       timestamp: new Date().toISOString(),
     });
   });
-
+  if (process.env.NODE_ENV !== 'production') {
+    app.listen(process.env.PORT || 5000, () => {
+      console.log('Server running on port 5000');
+    });
+  }
   // Health check — /api/health (no auth, no DB required)
-  app.get("/api/health", (_req: Request, res: Response) => {
+  app.get('/api/health', (_req: Request, res: Response) => {
     sendSuccess(res, {
-      message: "BookNook API is running",
+      message: 'BookNook API is running',
       environment: env.NODE_ENV,
       timestamp: new Date().toISOString(),
     });
@@ -140,7 +134,7 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   // ── Public testimonials ────────────────────────────────────────────────
   // Public read endpoint expected by the frontend. Returns an empty list
   // when no testimonials are configured — no auth, no DB required.
-  app.get("/api/testimonials", (_req: Request, res: Response) => {
+  app.get('/api/testimonials', (_req: Request, res: Response) => {
     sendSuccess(res, {
       results: 0,
       testimonials: [],
@@ -157,20 +151,14 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
 
   // Returns the identity the SERVER verified for the caller. The client
   // cannot influence any field of this response.
-  app.get("/api/auth/me", requireAuth, (req: Request, res: Response) => {
+  app.get('/api/auth/me', requireAuth, (req: Request, res: Response) => {
     sendSuccess(res, { data: req.auth?.user });
   });
 
   // Create a book. `requireAuth` establishes identity from the verified
   // Better Auth session; `validateBody` strips ownership fields from the
   // body so they can never reach the document.
-  app.post(
-    "/api/books",
-    writeLimiter,
-    requireAuth,
-    validateBody(createBookSchema),
-    createCreateBook(db)
-  );
+  app.post('/api/books', writeLimiter, requireAuth, validateBody(createBookSchema), createCreateBook(db));
 
   // ── My Books (owner list) ──────────────────────────────────────────────
   // The frontend's getMyBooks() tries /api/my-books first, then falls back
@@ -182,74 +170,47 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   // enumerate another user's books. That route simply 404s, and the chain
   // never reaches it because the session-based routes succeed.
   // Registered BEFORE GET /api/books/:id so ":id" cannot swallow "my"/"user".
-  app.get("/api/my-books", requireAuth, createGetMyBooks(db));
-  app.get("/api/books/my", requireAuth, createGetMyBooks(db));
-  app.get("/api/books/user", requireAuth, createGetMyBooks(db));
+  app.get('/api/my-books', requireAuth, createGetMyBooks(db));
+  app.get('/api/books/my', requireAuth, createGetMyBooks(db));
+  app.get('/api/books/user', requireAuth, createGetMyBooks(db));
 
   // ── Public book read APIs ───────────────────────────────────────────────
   // Assignment requirement: catalog + details stay publicly readable.
   // NOTE: static sub-routes (e.g. GET /api/books/my) are registered above,
   // BEFORE this `:id` route, otherwise ":id" would swallow them.
-  app.get("/api/books", createGetBooks(db));
-  app.get("/api/books/:id", validateObjectId("book"), createGetBookById(db));
+  app.get('/api/books', createGetBooks(db));
+  app.get('/api/books/:id', validateObjectId('book'), createGetBookById(db));
 
   // ── Book update & delete (owner-only) ──────────────────────────────────
   // The assignment specifies PATCH /api/books/:id; the frontend's
   // bookService.updateBook() sends PUT. Both verbs share the same handler
   // so the API contract holds for either caller. DELETE matches the
   // frontend's bookService.deleteBook() exactly.
-  const updateGuards = [
-    writeLimiter,
-    requireAuth,
-    validateObjectId("book"),
-    validateBody(updateBookSchema),
-  ] as const;
-  app.patch("/api/books/:id", ...updateGuards, createUpdateBook(db));
-  app.put("/api/books/:id", ...updateGuards, createUpdateBook(db));
-  app.delete(
-    "/api/books/:id",
-    writeLimiter,
-    requireAuth,
-    validateObjectId("book"),
-    createDeleteBook(db)
-  );
+  const updateGuards = [writeLimiter, requireAuth, validateObjectId('book'), validateBody(updateBookSchema)] as const;
+  app.patch('/api/books/:id', ...updateGuards, createUpdateBook(db));
+  app.put('/api/books/:id', ...updateGuards, createUpdateBook(db));
+  app.delete('/api/books/:id', writeLimiter, requireAuth, validateObjectId('book'), createDeleteBook(db));
 
   // ── Borrowing & returning ──────────────────────────────────────────────
   // POST /api/borrows reserves a copy atomically and records the borrow.
-  app.post(
-    "/api/borrows",
-    writeLimiter,
-    requireAuth,
-    validateBody(borrowBookSchema),
-    createBorrowBook(db)
-  );
+  app.post('/api/borrows', writeLimiter, requireAuth, validateBody(borrowBookSchema), createBorrowBook(db));
 
   // GET /api/borrows lists ONLY the verified session user's records. The
   // aliases match the frontend's getUserBorrows() fallback chain; the
   // email-based variants (/api/borrows/user/:email, ?email=) are
   // deliberately NOT implemented — identity never comes from the client.
-  app.get("/api/borrows", requireAuth, createGetMyBorrows(db));
-  app.get("/api/my-borrows", requireAuth, createGetMyBorrows(db));
-  app.get("/api/borrows/my", requireAuth, createGetMyBorrows(db));
-  app.get("/api/borrows/user", requireAuth, createGetMyBorrows(db));
+  app.get('/api/borrows', requireAuth, createGetMyBorrows(db));
+  app.get('/api/my-borrows', requireAuth, createGetMyBorrows(db));
+  app.get('/api/borrows/my', requireAuth, createGetMyBorrows(db));
+  app.get('/api/borrows/user', requireAuth, createGetMyBorrows(db));
 
   // DELETE /api/borrows/:id marks the borrow returned and restores the
   // copy exactly once. The PUT/PATCH /return aliases match the frontend's
   // preferred returnBook() paths so its first request succeeds.
   const returnGuards = [writeLimiter, requireAuth] as const;
-  app.delete("/api/borrows/:id", ...returnGuards, validateObjectId("borrow"), createReturnBook(db));
-  app.put(
-    "/api/borrows/:id/return",
-    ...returnGuards,
-    validateObjectId("borrow"),
-    createReturnBook(db)
-  );
-  app.patch(
-    "/api/borrows/:id/return",
-    ...returnGuards,
-    validateObjectId("borrow"),
-    createReturnBook(db)
-  );
+  app.delete('/api/borrows/:id', ...returnGuards, validateObjectId('borrow'), createReturnBook(db));
+  app.put('/api/borrows/:id/return', ...returnGuards, validateObjectId('borrow'), createReturnBook(db));
+  app.patch('/api/borrows/:id/return', ...returnGuards, validateObjectId('borrow'), createReturnBook(db));
 
   // 404 + centralized error handling (must come after routes).
   // The error handler maps every failure onto the standard envelope and
