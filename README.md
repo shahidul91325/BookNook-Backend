@@ -237,7 +237,44 @@ A `render.yaml` is included at the repository root. Create a new "Blueprint" in 
 4. Add environment variables (see table above) in Render's Environment tab.
 5. Deploy.
 
-> **Note:** I have not actually deployed this backend to Render or any other host. Deployment must be performed and tested separately before it can be claimed as complete.
+---
+
+## Deployment (Vercel)
+
+This backend is configured as a Vercel serverless function via `vercel.json`. All requests route to `/dist/api/index.js`, which exports a default Express handler (no `app.listen()` — the function is invoked directly by the Vercel Node.js runtime).
+
+### Required steps
+
+1. **Connect the repo** to Vercel as a project (Import → select `BookNook-Backend`).
+2. **Build command:** `npm install && npm run build` (Vercel detects this from `vercel.json`).
+3. **Output directory:** Vercel uses the `dist/` folder produced by `tsc`.
+4. **Set environment variables** in the Vercel project dashboard (do **not** commit `.env`):
+
+| Variable | Description | Required on Vercel |
+|---|---|---|
+| `NODE_ENV` | `production` | Yes |
+| `PORT` | Any value (ignored by serverless runtime, but `env.ts` requires it) | Yes |
+| `MONGODB_URI` | MongoDB Atlas connection string | Yes |
+| `DB_NAME` | Database name (shared with frontend Better Auth) | Yes |
+| `CORS_ORIGIN` | Production frontend URL (exact origin, no wildcard) | Yes |
+| `BETTER_AUTH_SECRET` | HMAC secret, byte-identical to frontend `.env.local` (min 32 chars) | Yes |
+| `FRONTEND_URL` | Fallback CORS origin | No |
+| `BETTER_AUTH_URL` | Better Auth base URL | No |
+
+### Critical Vercel settings
+
+- **MongoDB Atlas IP whitelist:** Add Vercel's outbound IP ranges to your Atlas cluster's Network Access list, or serverless function connections will fail.
+- **`CORS_ORIGIN`:** Must be your production frontend URL (e.g. `https://booknook.vercel.app`). Wildcards are rejected because credentials are enabled.
+- **`BETTER_AUTH_SECRET`:** Must match the frontend's Next.js `.env.local` exactly, or all authenticated requests fail with 401.
+
+### How the serverless handler works
+
+- `src/api/index.ts` is the Vercel entry point. It exports a default `async function handler(req, res)`.
+- `GET /`, `GET /api/health`, and `GET /api/testimonials` are answered immediately without MongoDB (fast path).
+- All other routes initialize the Express app (which connects to MongoDB) with an 8-second timeout. If MongoDB is unreachable, a JSON `503` is returned instead of hanging.
+- The MongoDB `MongoClient` is cached in module scope and reused across warm invocations. Concurrent connection attempts are deduplicated via a single in-flight promise.
+
+> **Note:** Deployment must be performed and tested separately before it can be claimed as complete. Test `GET /`, `GET /api/health`, and `GET /api/testimonials` first — these should respond even if MongoDB is temporarily unavailable.
 
 ---
 

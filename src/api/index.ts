@@ -26,8 +26,10 @@ import { connectDB } from "../config/db.js";
  *  response before the edge cuts the connection. */
 const INIT_TIMEOUT_MS = 8_000;
 
-/** Paths that do not require MongoDB and can be answered immediately. */
-const HEALTH_PATHS = ["/", "/api/health"];
+/** Paths that do not require MongoDB and can be answered immediately.
+ *  These respond with static data without touching the database, so they
+ *  never hang even when MongoDB is slow or unreachable. */
+const FAST_PATHS = ["/", "/api/health", "/api/testimonials"];
 
 /** Lazily-created, cached Express app bound to a (reused) MongoDB client. */
 let appPromise: Promise<Express> | null = null;
@@ -75,9 +77,9 @@ export default async function handler(
 ): Promise<void> {
   const url = req.url ?? "";
 
-  // ── Fast path: health checks answer immediately, no MongoDB needed ─────
-  if (HEALTH_PATHS.includes(url)) {
-    logInfo(`health check: ${url}`);
+  // ── Fast path: static answers immediately, no MongoDB needed ───────────
+  if (FAST_PATHS.includes(url)) {
+    logInfo(`fast path: ${url}`);
     sendJson(res, 200, {
       status: "success",
       message: "BookNook API is running",
