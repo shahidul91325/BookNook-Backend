@@ -3,10 +3,11 @@ import { z } from "zod";
 /**
  * Zod validation for the book write APIs.
  *
- * The category list is kept byte-identical to the frontend's
- * `CATEGORIES` constant in `components/books/add-book-form.tsx` —
- * a book with any other category would render as an unknown filter
- * option in the catalog.
+ * The category list is a SUPERSET of the frontend's `CATEGORIES` constant
+ * in `components/books/add-book-form.tsx`: every category the Next.js
+ * Add Book form can send is accepted here, plus a few legacy values the
+ * edit dialog still offers. A book with any other category is rejected
+ * with 400 so the catalog never surfaces an unknown filter option.
  */
 
 export const BOOK_CATEGORIES = [
@@ -18,6 +19,18 @@ export const BOOK_CATEGORIES = [
   "Programming",
   "Fantasy",
   "Financial",
+  "Mystery & Thriller",
+  "Romance",
+  "Fantasy & Adventure",
+  "History & Biography",
+  "Science & Technology",
+  "Programming & Computer Science",
+  "Self-Help & Personal Development",
+  "Education & Academic",
+  "Psychology",
+  "Religion & Spirituality",
+  "Children & Young Adult",
+  "Poetry & Literature",
   "Others",
 ] as const;
 
