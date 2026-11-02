@@ -7,8 +7,10 @@ let client: MongoClient | null = null;
  *  of spawning duplicate clients. */
 let connectionPromise: Promise<MongoClient> | null = null;
 
-/** Max time (ms) to wait for the initial MongoDB connection and for each socket operation. */
-const CONNECT_TIMEOUT_MS = 10_000;
+/** Max time (ms) to wait for the initial MongoDB connection and for each socket operation.
+ *  Kept deliberately below INIT_TIMEOUT_MS (8s) in api/index.ts so we can
+ *  always send a 503 before Vercel's 10s edge timeout cuts the connection. */
+const CONNECT_TIMEOUT_MS = 5_000;
 
 export const connectDB = async (): Promise<Db> => {
   if (client) {

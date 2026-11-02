@@ -29,7 +29,13 @@ const INIT_TIMEOUT_MS = 8_000;
 /** Paths that do not require MongoDB and can be answered immediately.
  *  These respond with static data without touching the database, so they
  *  never hang even when MongoDB is slow or unreachable. */
-const FAST_PATHS = ["/", "/api/health", "/api/testimonials"];
+const FAST_PATHS: Record<string, { status: number; body: Record<string, unknown> }> = {
+  "/": { status: 200, body: { status: "success", message: "BookNook API is running" } },
+  "/api/health": { status: 200, body: { status: "success", message: "BookNook API is running" } },
+  "/api/testimonials": { status: 200, body: { status: "success", results: 0, testimonials: [] } },
+  "/favicon.ico": { status: 404, body: { status: "fail", message: "Not found" } },
+  "/favicon.png": { status: 404, body: { status: "fail", message: "Not found" } },
+};
 
 /** Lazily-created, cached Express app bound to a (reused) MongoDB client. */
 let appPromise: Promise<Express> | null = null;
@@ -78,14 +84,10 @@ export default async function handler(
   const url = req.url ?? "";
 
   // ── Fast path: static answers immediately, no MongoDB needed ───────────
-  if (FAST_PATHS.includes(url)) {
+  const fastPath = FAST_PATHS[url];
+  if (fastPath) {
     logInfo(`fast path: ${url}`);
-    sendJson(res, 200, {
-      status: "success",
-      message: "BookNook API is running",
-      environment: process.env.NODE_ENV ?? "production",
-      timestamp: new Date().toISOString(),
-    });
+    sendJson(res, fastPath.status, fastPath.body);
     return;
   }
 
