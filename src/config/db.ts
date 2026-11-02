@@ -3,11 +3,16 @@ import { env } from "./env.js";
 
 let client: MongoClient | null = null;
 
+/** Max time (ms) to wait for the initial MongoDB connection and for each socket operation. */
+const CONNECT_TIMEOUT_MS = 10_000;
+
 export const connectDB = async (): Promise<Db> => {
   if (!client) {
     client = new MongoClient(env.MONGODB_URI, {
       maxPoolSize: 10,
-      serverSelectionTimeoutMS: 10_000,
+      connectTimeoutMS: CONNECT_TIMEOUT_MS,
+      socketTimeoutMS: CONNECT_TIMEOUT_MS,
+      serverSelectionTimeoutMS: CONNECT_TIMEOUT_MS,
     });
     await client.connect();
     console.log("✅ MongoDB Atlas connected");
