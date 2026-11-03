@@ -24,11 +24,11 @@
  *   13. Final sweep: no response ever contains stack frames, driver
  *       internals, connection strings, or secret values
  */
-import { createHmac } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { MongoClient, ObjectId } from "mongodb";
 import createApp from "../src/app.js";
+import { createAuth } from "../src/auth.js";
 import { env } from "../src/config/env.js";
 import { errorHandler } from "../src/middleware/errorHandler.js";
 import { ApiError, OperationError } from "../src/utils/errors.js";
@@ -48,12 +48,6 @@ const check = (label: string, condition: boolean, detail = ""): void => {
     failed += 1;
     console.log(`  ❌ ${label}${detail ? ` — ${detail}` : ""}`);
   }
-};
-
-/** Replicates better-call's `signCookieValue` used by Better Auth 1.7.14. */
-const signSessionCookie = (token: string, secret: string): string => {
-  const signature = createHmac("sha256", secret).update(token).digest("base64");
-  return encodeURIComponent(`${token}.${signature}`);
 };
 
 interface ApiBook {
@@ -117,13 +111,11 @@ const run = async (): Promise<void> => {
   const books = db.collection("books");
   const borrows = db.collection("borrows");
   const users = db.collection("user");
-  const sessions = db.collection("session");
   await books.deleteMany({});
   await borrows.deleteMany({});
   await users.deleteMany({});
-  await sessions.deleteMany({});
 
-  // ── Fixtures: verified users with valid signed sessions ─────────────────
+  // ── Fixtures: users authenticated by Better Auth signed JWTs ────────────
   const now = new Date();
   const aliceId = new ObjectId();
   const bobId = new ObjectId();
@@ -131,17 +123,17 @@ const run = async (): Promise<void> => {
     { _id: aliceId, name: "Alice Owner", email: "alice@test.local", emailVerified: true, image: null, createdAt: now, updatedAt: now },
     { _id: bobId, name: "Bob Other", email: "bob@test.local", emailVerified: true, image: null, createdAt: now, updatedAt: now },
   ]);
-  const aliceToken = "security-phase-alice0000000000";
-  const bobToken = "security-phase-bob0000000000000";
-  await sessions.insertMany([
-    { token: aliceToken, userId: aliceId, expiresAt: new Date(Date.now() + 3_600_000), createdAt: now, updatedAt: now },
-    { token: bobToken, userId: bobId, expiresAt: new Date(Date.now() + 3_600_000), createdAt: now, updatedAt: now },
-  ]);
-  const cookieName = "better-auth.session_token";
-  const cookieFor = (token: string): string =>
-    `${cookieName}=${signSessionCookie(token, env.BETTER_AUTH_SECRET)}`;
-  const aliceCookie = cookieFor(aliceToken);
-  const bobCookie = cookieFor(bobToken);
+  const auth = createAuth(db);
+  const makeJwt = async (userId: ObjectId, exp: number): Promise<string> => {
+    const result = await auth.api.signJWT({
+      body: {
+        payload: { sub: userId.toString(), iat: Math.floor(Date.now() / 1000), exp },
+      },
+    });
+    return result.token;
+  };
+  const aliceToken = await makeJwt(aliceId, Math.floor(Date.now() / 1000) + 3600);
+  const bobToken = await makeJwt(bobId, Math.floor(Date.now() / 1000) + 3600);
 
   // ── Fixtures: books + one active borrow ─────────────────────────────────
   const baseTime = Date.now();
@@ -186,6 +178,7 @@ const run = async (): Promise<void> => {
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
   const base = `http://127.0.0.1:${port}`;
+  process.env.JWT_JWKS_URL = `${base}/api/auth/jwks`;
 
   const request = async (
     path: string,
@@ -203,10 +196,10 @@ const run = async (): Promise<void> => {
     return { status: res.status, body, headers: res.headers };
   };
 
-  const get = (path: string, cookie?: string, origin?: string): Promise<HttpResult> =>
+  const get = (path: string, token?: string, origin?: string): Promise<HttpResult> =>
     request(path, {
       headers: {
-        ...(cookie ? { cookie } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(origin ? { origin } : {}),
       },
     });
@@ -215,14 +208,14 @@ const run = async (): Promise<void> => {
     path: string,
     method: "POST" | "PATCH" | "PUT" | "DELETE",
     body: unknown,
-    cookie?: string,
+    token?: string,
     rawBody?: string
   ): Promise<HttpResult> =>
     request(path, {
       method,
       headers: {
         "content-type": "application/json",
-        ...(cookie ? { cookie } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: rawBody ?? JSON.stringify(body),
     });
@@ -241,9 +234,9 @@ const run = async (): Promise<void> => {
   console.log("\n1. Error-response envelope consistency");
   {
     const cases: Array<[string, HttpResult]> = [
-      ["400 invalid payload", await send("/api/books", "POST", {}, aliceCookie)],
-      ["401 unauthenticated", await get("/api/auth/me")],
-      ["403 foreign resource", await send(`/api/books/${secureId}`, "PATCH", { title: "Hacked" }, bobCookie)],
+      ["400 invalid payload", await send("/api/books", "POST", {}, aliceToken)],
+      ["401 unauthenticated", await get("/api/my-books")],
+      ["403 foreign resource", await send(`/api/books/${secureId}`, "PATCH", { title: "Hacked" }, bobToken)],
       ["404 unknown route", await get("/api/does-not-exist")],
       ["400 invalid id", await get("/api/books/not-an-id")],
     ];
@@ -258,7 +251,7 @@ const run = async (): Promise<void> => {
   // ══════════════════════════════════════════════════════════════════════
   console.log("\n2. Invalid payloads → 400 with per-field errors");
   {
-    const emptyCreate = await send("/api/books", "POST", {}, aliceCookie);
+    const emptyCreate = await send("/api/books", "POST", {}, aliceToken);
     check("400 for empty book body", emptyCreate.status === 400);
     const createKeys = Object.keys(emptyCreate.body.errors ?? {});
     check("per-field errors for title/author/category/image/description",
@@ -270,7 +263,7 @@ const run = async (): Promise<void> => {
       "/api/books",
       "POST",
       { title: "Valid Title", author: "Valid Author", category: "Astrology", image: "https://x.test/i.jpg", description: "A valid description, long enough." },
-      aliceCookie
+      aliceToken
     );
     check("400 for disallowed category", badCategory.status === 400 && "category" in (badCategory.body.errors ?? {}));
 
@@ -278,19 +271,19 @@ const run = async (): Promise<void> => {
       "/api/books",
       "POST",
       { title: "Valid Title", author: "Valid Author", category: "Fiction", image: "javascript:alert(1)", description: "A valid description, long enough." },
-      aliceCookie
+      aliceToken
     );
     check("400 for javascript: image", badImage.status === 400 && "image" in (badImage.body.errors ?? {}));
 
-    const emptyUpdate = await send(`/api/books/${secureId}`, "PATCH", {}, aliceCookie);
+    const emptyUpdate = await send(`/api/books/${secureId}`, "PATCH", {}, aliceToken);
     check("400 for empty update body", emptyUpdate.status === 400);
     checkErrorEnvelope("empty update", emptyUpdate);
 
-    const emptyBorrow = await send("/api/borrows", "POST", {}, aliceCookie);
+    const emptyBorrow = await send("/api/borrows", "POST", {}, aliceToken);
     check("400 for empty borrow body", emptyBorrow.status === 400 && "bookId" in (emptyBorrow.body.errors ?? {}));
-    const junkBorrow = await send("/api/borrows", "POST", { bookId: "junk" }, aliceCookie);
+    const junkBorrow = await send("/api/borrows", "POST", { bookId: "junk" }, aliceToken);
     check("400 for malformed bookId in body", junkBorrow.status === 400 && "bookId" in (junkBorrow.body.errors ?? {}));
-    const pastDate = await send("/api/borrows", "POST", { bookId: secureId, returnDate: "2020-01-01" }, aliceCookie);
+    const pastDate = await send("/api/borrows", "POST", { bookId: secureId, returnDate: "2020-01-01" }, aliceToken);
     check("400 for past returnDate", pastDate.status === 400 && "returnDate" in (pastDate.body.errors ?? {}));
     checkErrorEnvelope("borrow payload", pastDate);
   }
@@ -298,7 +291,7 @@ const run = async (): Promise<void> => {
   // ══════════════════════════════════════════════════════════════════════
   console.log("\n3. Malformed JSON and oversized request bodies");
   {
-    const malformed = await send("/api/books", "POST", undefined, aliceCookie, '{"title": "unterminated');
+    const malformed = await send("/api/books", "POST", undefined, aliceToken, '{"title": "unterminated');
     check("400 for malformed JSON", malformed.status === 400);
     checkErrorEnvelope("malformed JSON", malformed);
     check("malformed JSON message does not echo the payload",
@@ -308,7 +301,7 @@ const run = async (): Promise<void> => {
       "/api/books",
       "POST",
       undefined,
-      aliceCookie,
+      aliceToken,
       JSON.stringify({ description: "x".repeat(700_000) })
     );
     check("413 for body over the 512kb limit", huge.status === 413, `got ${huge.status}`);
@@ -321,7 +314,6 @@ const run = async (): Promise<void> => {
   console.log("\n4. Unauthorized requests → 401 on every protected endpoint");
   {
     const protectedCalls: Array<[string, Promise<HttpResult>]> = [
-      ["GET /api/auth/me", get("/api/auth/me")],
       ["POST /api/books", send("/api/books", "POST", { title: "X" })],
       ["GET /api/my-books", get("/api/my-books")],
       ["GET /api/books/my", get("/api/books/my")],
@@ -344,16 +336,12 @@ const run = async (): Promise<void> => {
       else check(`${label} → 401`, result.body.status === "fail");
     }
 
-    // Forged credentials never authenticate.
-    const forged = `${cookieName}=${signSessionCookie(aliceToken, "attacker-secret-32-chars-long!!!!!")}`;
-    const forgedResult = await get("/api/auth/me", forged);
-    check("cookie signed with wrong secret → 401", forgedResult.status === 401);
-    const garbage = await get("/api/auth/me", `${cookieName}=not.signed.value`);
-    check("structurally invalid cookie → 401", garbage.status === 401);
-    const expiredToken = "security-phase-expired00000000";
-    await sessions.insertOne({ token: expiredToken, userId: aliceId, expiresAt: new Date(Date.now() - 1000), createdAt: now, updatedAt: now });
-    const expired = await get("/api/auth/me", cookieFor(expiredToken));
-    check("expired session → 401", expired.status === 401);
+    // Forged and expired Bearer credentials never authenticate.
+    const forgedResult = await get("/api/my-books", "invalid.signature.value");
+    check("invalid Better Auth JWT → 401", forgedResult.status === 401);
+    const expiredToken = await makeJwt(aliceId, Math.floor(Date.now() / 1000) - 60);
+    const expired = await get("/api/my-books", expiredToken);
+    check("expired Better Auth JWT → 401", expired.status === 401);
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -361,18 +349,18 @@ const run = async (): Promise<void> => {
   {
     const titleBefore = (await books.findOne({ _id: new ObjectId(secureId) }))?.title;
 
-    const patch = await send(`/api/books/${secureId}`, "PATCH", { title: "Bob Was Here" }, bobCookie);
+    const patch = await send(`/api/books/${secureId}`, "PATCH", { title: "Bob Was Here" }, bobToken);
     check("403 when another user updates your book", patch.status === 403);
     checkErrorEnvelope("foreign update", patch);
 
-    const put = await send(`/api/books/${secureId}`, "PUT", { title: "Bob Was Here" }, bobCookie);
+    const put = await send(`/api/books/${secureId}`, "PUT", { title: "Bob Was Here" }, bobToken);
     check("403 via PUT alias too", put.status === 403);
 
-    const del = await send(`/api/books/${secureId}`, "DELETE", undefined, bobCookie);
+    const del = await send(`/api/books/${secureId}`, "DELETE", undefined, bobToken);
     check("403 when another user deletes your book", del.status === 403);
 
     const foreignBorrow = await borrows.findOne({ userId: aliceId.toString(), status: "borrowed" });
-    const ret = await send(`/api/borrows/${foreignBorrow!._id.toString()}`, "DELETE", undefined, bobCookie);
+    const ret = await send(`/api/borrows/${foreignBorrow!._id.toString()}`, "DELETE", undefined, bobToken);
     check("403 when returning someone else's borrow", ret.status === 403);
     checkErrorEnvelope("foreign return", ret);
 
@@ -391,17 +379,17 @@ const run = async (): Promise<void> => {
       check(`GET /api/books/${bad} → 400`, read.status === 400);
       if (bad === badIds[0]) checkErrorEnvelope("invalid id", read);
     }
-    const patch = await send(`/api/books/${badIds[0]}`, "PATCH", { title: "X" }, aliceCookie);
+    const patch = await send(`/api/books/${badIds[0]}`, "PATCH", { title: "X" }, aliceToken);
     check("PATCH with malformed id → 400", patch.status === 400);
-    const put = await send(`/api/books/${badIds[1]}`, "PUT", { title: "X" }, aliceCookie);
+    const put = await send(`/api/books/${badIds[1]}`, "PUT", { title: "X" }, aliceToken);
     check("PUT with malformed id → 400", put.status === 400);
-    const del = await send(`/api/books/${badIds[2]}`, "DELETE", undefined, aliceCookie);
+    const del = await send(`/api/books/${badIds[2]}`, "DELETE", undefined, aliceToken);
     check("DELETE with malformed id → 400", del.status === 400);
-    const retDel = await send(`/api/borrows/${badIds[0]}`, "DELETE", undefined, aliceCookie);
+    const retDel = await send(`/api/borrows/${badIds[0]}`, "DELETE", undefined, aliceToken);
     check("DELETE borrow with malformed id → 400", retDel.status === 400);
-    const retPut = await send(`/api/borrows/${badIds[1]}/return`, "PUT", undefined, aliceCookie);
+    const retPut = await send(`/api/borrows/${badIds[1]}/return`, "PUT", undefined, aliceToken);
     check("PUT /return with malformed id → 400", retPut.status === 400);
-    const retPatch = await send(`/api/borrows/${badIds[3]}/return`, "PATCH", undefined, aliceCookie);
+    const retPatch = await send(`/api/borrows/${badIds[3]}/return`, "PATCH", undefined, aliceToken);
     check("PATCH /return with malformed id → 400", retPatch.status === 400);
 
     // A well-formed but unknown id is a 404, not a crash.
@@ -591,7 +579,7 @@ const run = async (): Promise<void> => {
     for (let i = 0; i < 5; i += 1) {
       const res = await fetch(`${writeBase}/api/borrows`, {
         method: "POST",
-        headers: { "content-type": "application/json", cookie: aliceCookie },
+        headers: { "content-type": "application/json", authorization: `Bearer ${aliceToken}` },
         body: JSON.stringify({}),
       });
       writeStatuses.push(res.status);
@@ -649,7 +637,7 @@ const run = async (): Promise<void> => {
         createdAt: "1999-01-01T00:00:00.000Z",
         availableCopies: 999,
       },
-      aliceCookie
+      aliceToken
     );
     check("spoofed create → 201", spoofed.status === 201);
     const created = spoofed.body.data as ApiBook;
@@ -662,20 +650,20 @@ const run = async (): Promise<void> => {
       `/api/books/${secureId}`,
       "PATCH",
       { title: "Still Alice's Book", addedBy: bobId.toString(), userEmail: "bob@test.local", availableCopies: 99 },
-      aliceCookie
+      aliceToken
     );
     check("spoofed update → 200", spoofUpdate.status === 200);
     const updated = spoofUpdate.body.data as ApiBook;
     check("update cannot transfer ownership", updated.addedBy === aliceId.toString());
     check("update cannot set counters directly", updated.availableCopies === 2, `availableCopies=${updated.availableCopies}`);
 
-    const spoofQuery = await get(`/api/borrows?email=bob@test.local&userId=${bobId.toString()}`, aliceCookie);
+    const spoofQuery = await get(`/api/borrows?email=bob@test.local&userId=${bobId.toString()}`, aliceToken);
     const rows = (spoofQuery.body.data as ApiBorrow[]) ?? [];
     check("spoofed list query params ignored — own records only",
       rows.length > 0 && rows.every((r) => r.userId === aliceId.toString()));
 
     // The email-based identity route must stay unimplemented (404).
-    const emailRoute = await get(`/api/books/user/${encodeURIComponent("bob@test.local")}`, aliceCookie);
+    const emailRoute = await get(`/api/books/user/${encodeURIComponent("bob@test.local")}`, aliceToken);
     check("email-based identity route still 404", emailRoute.status === 404);
   }
 
@@ -687,13 +675,7 @@ const run = async (): Promise<void> => {
     check("GET /api/health → 200", health.status === 200 && health.body.status === "success"
       && typeof health.body.environment === "string" && typeof health.body.timestamp === "string");
 
-    // 2. Current identity
-    const me = await get("/api/auth/me", aliceCookie);
-    const meData = me.body.data as { id?: string; email?: string };
-    check("GET /api/auth/me → 200 + verified identity",
-      me.status === 200 && meData.id === aliceId.toString() && meData.email === "alice@test.local");
-
-    // 3. Public catalog
+    // 2. Public catalog
     const list = await get("/api/books");
     check("GET /api/books → 200 + envelope",
       list.status === 200 && list.body.status === "success" && Array.isArray(list.body.books)
@@ -710,26 +692,26 @@ const run = async (): Promise<void> => {
       "/api/books",
       "POST",
       { title: "Phase Eight Book", author: "Security Tester", category: "Programming", image: "https://example.com/p8.jpg", description: "Created to prove the create endpoint contract holds.", quantity: 2, rating: 4.2 },
-      aliceCookie
+      aliceToken
     );
     check("POST /api/books → 201 + data", created.status === 201 && created.body.status === "success");
     const createdBook = created.body.data as ApiBook;
     check("created book readable publicly", (await get(`/api/books/${createdBook.id}`)).status === 200);
 
     // 6. Update (PATCH and the frontend's PUT alias)
-    const patched = await send(`/api/books/${createdBook.id}`, "PATCH", { title: "Phase Eight Book (Updated)" }, aliceCookie);
+    const patched = await send(`/api/books/${createdBook.id}`, "PATCH", { title: "Phase Eight Book (Updated)" }, aliceToken);
     check("PATCH /api/books/:id → 200 + data", patched.status === 200 && (patched.body.data as ApiBook).title === "Phase Eight Book (Updated)");
-    const put = await send(`/api/books/${createdBook.id}`, "PUT", { rating: 4.9 }, aliceCookie);
+    const put = await send(`/api/books/${createdBook.id}`, "PUT", { rating: 4.9 }, aliceToken);
     check("PUT /api/books/:id → 200 (frontend alias)", put.status === 200 && (put.body.data as ApiBook).rating === 4.9);
 
     // 7. Delete
-    const deleted = await send(`/api/books/${createdBook.id}`, "DELETE", undefined, aliceCookie);
+    const deleted = await send(`/api/books/${createdBook.id}`, "DELETE", undefined, aliceToken);
     check("DELETE /api/books/:id → 200 + success flag",
       deleted.status === 200 && deleted.body.status === "success" && deleted.body.success === true);
     check("deleted book is gone", (await get(`/api/books/${createdBook.id}`)).status === 404);
 
     // 8. Borrow
-    const borrowed = await send("/api/borrows", "POST", { bookId: deleteMeId, bookTitle: "SPOOFED", userEmail: "spoof@evil.test" }, aliceCookie);
+    const borrowed = await send("/api/borrows", "POST", { bookId: deleteMeId, bookTitle: "SPOOFED", userEmail: "spoof@evil.test" }, aliceToken);
     check("POST /api/borrows → 201 + data", borrowed.status === 201 && borrowed.body.status === "success");
     const borrowRow = borrowed.body.data as ApiBorrow;
     check("borrow record built server-side",
@@ -737,29 +719,29 @@ const run = async (): Promise<void> => {
       && borrowRow.userEmail === "alice@test.local" && borrowRow.status === "borrowed");
 
     // 9. Borrow list (+ aliases)
-    const borrowsList = await get("/api/borrows", aliceCookie);
+    const borrowsList = await get("/api/borrows", aliceToken);
     check("GET /api/borrows → 200 + data array",
       borrowsList.status === 200 && Array.isArray(borrowsList.body.data) && typeof borrowsList.body.total === "number");
     for (const alias of ["/api/my-borrows", "/api/borrows/my", "/api/borrows/user"]) {
-      const res = await get(alias, aliceCookie);
+      const res = await get(alias, aliceToken);
       check(`${alias} alias → 200`, res.status === 200);
     }
-    const myBooks = await get("/api/my-books", aliceCookie);
+    const myBooks = await get("/api/my-books", aliceToken);
     check("GET /api/my-books → 200 + own books only",
       myBooks.status === 200 && (myBooks.body.books ?? []).every((b) => b.addedBy === aliceId.toString()));
-    check("/api/books/my alias → 200", (await get("/api/books/my", aliceCookie)).status === 200);
-    check("/api/books/user alias → 200", (await get("/api/books/user", aliceCookie)).status === 200);
+    check("/api/books/my alias → 200", (await get("/api/books/my", aliceToken)).status === 200);
+    check("/api/books/user alias → 200", (await get("/api/books/user", aliceToken)).status === 200);
 
     // 10. Return (DELETE + PUT/PATCH aliases)
-    const returned = await send(`/api/borrows/${borrowRow.id}`, "DELETE", undefined, aliceCookie);
+    const returned = await send(`/api/borrows/${borrowRow.id}`, "DELETE", undefined, aliceToken);
     check("DELETE /api/borrows/:id → 200 + success flag",
       returned.status === 200 && returned.body.status === "success" && returned.body.success === true);
     check("returned copy is available again",
       (await books.findOne({ _id: new ObjectId(deleteMeId) }))?.availableCopies === 1);
 
-    const borrowedAgain = await send("/api/borrows", "POST", { bookId: deleteMeId }, aliceCookie);
+    const borrowedAgain = await send("/api/borrows", "POST", { bookId: deleteMeId }, aliceToken);
     const secondRow = borrowedAgain.body.data as ApiBorrow;
-    const putReturn = await send(`/api/borrows/${secondRow.id}/return`, "PUT", undefined, aliceCookie);
+    const putReturn = await send(`/api/borrows/${secondRow.id}/return`, "PUT", undefined, aliceToken);
     check("PUT /api/borrows/:id/return → 200 (frontend alias)", putReturn.status === 200);
 
     // 404 consistency for unknown routes
@@ -776,7 +758,8 @@ const run = async (): Promise<void> => {
     check("no MongoDB driver internals anywhere", !/E11000|MongoServerError|MongoParseError|collection:/.test(joined));
     check("no connection string anywhere", !joined.includes("mongodb://") && !joined.includes("mongodb+srv://"));
     check("Better Auth secret never echoed", !joined.includes(env.BETTER_AUTH_SECRET));
-    check("no MONGODB_URI credentials anywhere", !joined.includes("BookNook:NVG4aolZ5RXl0fJS") && !joined.includes("ac-qs6r3zp"));
+    check("no MongoDB connection string anywhere",
+      !joined.includes("mongodb://") && !joined.includes("mongodb+srv://"));
   }
 
   // ── Cleanup ─────────────────────────────────────────────────────────────

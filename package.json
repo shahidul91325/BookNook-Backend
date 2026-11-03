@@ -15,8 +15,8 @@
     "verify:manage": "npm run verify:integration",
     "verify:borrows": "npm run verify:integration",
     "verify:integration": "tsx scripts/verify-integration.ts",
-    "verify:security": "npm run verify:integration",
-    "verify": "npm run build && npm run verify:models && npm run verify:auth && npm run verify:integration"
+    "verify:security": "tsx scripts/verify-security.ts",
+    "verify": "npm run build && npm run verify:models && npm run verify:books && npm run verify:auth && npm run verify:integration && npm run verify:security"
   },
   "keywords": [],
   "author": "",

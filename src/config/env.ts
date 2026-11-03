@@ -10,7 +10,7 @@ export interface EnvConfig {
   NODE_ENV: "development" | "production" | "test";
   PORT: number;
   MONGODB_URI: string;
-  /** Database name shared with the Next.js frontend (Better Auth collections live here). */
+  /** Database used by the Express API and Better Auth adapter. */
   DB_NAME: string;
   /** Raw, comma-separated CORS origins as configured. */
   CORS_ORIGIN: string;
@@ -68,7 +68,12 @@ if (!mongodbUri) {
   missing.push("MONGODB_URI");
 }
 
-const dbName = process.env.DB_NAME ?? "booknook";
+// MONGODB_DB_NAME is the documented name. Keep DB_NAME as a fallback for
+// deployments created before the variable was standardized.
+const dbName = process.env.MONGODB_DB_NAME ?? process.env.DB_NAME ?? "booknook";
+if (!dbName.trim()) {
+  throw new Error("MONGODB_DB_NAME must not be empty.");
+}
 
 const betterAuthSecret = process.env.BETTER_AUTH_SECRET;
 if (!betterAuthSecret) {
