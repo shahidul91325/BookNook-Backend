@@ -4,14 +4,12 @@ import { authenticateRequest } from "../services/auth.service.js";
 import type { AuthenticatedContext } from "../types/auth.js";
 import { sendError } from "../utils/httpResponse.js";
 import { logError } from "../utils/logger.js";
-import { createRequireAdmin } from "./admin.js";
 
 /**
  * Reusable authentication/authorization middleware for the BookNook API.
  *
  * `requireAuth` establishes request identity EXCLUSIVELY from a
- * cryptographically verified Better Auth session (HMAC-checked cookie or
- * bearer value + authoritative lookup in the `session` collection).
+ * cryptographically verified Better Auth JWT from the Authorization header.
  * Client-supplied `userId` / `email` / ownership fields in the body,
  * query, or headers are NEVER read to determine who the caller is.
  *
@@ -63,10 +61,8 @@ export const requireAuthContext = (
 /**
  * Creates the authentication middleware bound to a database handle.
  *
- * Accepts credentials from (in order):
- *   1. The `better-auth.session_token` cookie (HMAC signature required).
- *   2. An `Authorization: Bearer <token>` header (signed or bare opaque
- *      session token — same rules as Better Auth's `bearer()` plugin).
+ * Accepts only `Authorization: Bearer <JWT>`; cookies and opaque session
+ * tokens are not credentials for the REST API.
  */
 export const createRequireAuth =
   (db: Db): RequestHandler =>
@@ -74,7 +70,6 @@ export const createRequireAuth =
     try {
       const context = await authenticateRequest(
         db,
-        req.headers.cookie,
         req.headers.authorization
       );
 
@@ -108,6 +103,3 @@ export const createRequireAuth =
  */
 export const isOwner = (req: Request, ownerId: string): boolean =>
   Boolean(req.auth && req.auth.user.id === ownerId);
-
-/** Re-exported from `./admin.js` for convenient single-import usage. */
-export { createRequireAdmin };

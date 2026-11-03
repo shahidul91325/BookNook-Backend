@@ -21,11 +21,15 @@ export interface EnvConfig {
    */
   CORS_ORIGINS: string[];
   /**
-   * The Better Auth signing secret — MUST be byte-identical to the
-   * `BETTER_AUTH_SECRET` used by the frontend, because session cookies
-   * are HMAC-SHA256 signed with it.
+   * The Better Auth signing secret used by the sole Express auth server.
    */
   BETTER_AUTH_SECRET: string;
+  /** Frontend origin plus the /api/auth base path forwarded to Express. */
+  BETTER_AUTH_URL: string;
+  /** Optional direct URL to the Express JWT plugin's JWKS endpoint. */
+  JWT_JWKS_URL: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
   /** Rate limiting: length of one counting window, in milliseconds. */
   RATE_LIMIT_WINDOW_MS: number;
   /** Rate limiting: max requests per client per window (all endpoints). */
@@ -38,8 +42,6 @@ export interface EnvConfig {
    * otherwise clients could spoof `X-Forwarded-For` to dodge rate limits.
    */
   TRUST_PROXY: number;
-  /** Secret used to sign and verify JWT access tokens. */
-  JWT_SECRET: string;
   /** JWT issuer claim — must match the value Better Auth uses when issuing. */
   JWT_ISSUER: string;
   /** JWT audience claim — must match the value the API expects. */
@@ -74,8 +76,14 @@ if (!betterAuthSecret) {
 } else if (betterAuthSecret.length < 32) {
   throw new Error(
     "BETTER_AUTH_SECRET must be at least 32 characters long. " +
-      "Use the exact same secret as the frontend (BETTER_AUTH_SECRET in the Next.js .env.local)."
+      "Keep this secret on the Express server only."
   );
+}
+
+const betterAuthUrl = process.env.BETTER_AUTH_URL;
+if (!betterAuthUrl) missing.push("BETTER_AUTH_URL");
+else if (!/^https?:\/\/[^\s]+\/api\/auth\/?$/i.test(betterAuthUrl)) {
+  throw new Error("BETTER_AUTH_URL must be the frontend auth URL ending in /api/auth.");
 }
 
 const corsOrigin =
@@ -149,20 +157,9 @@ if (!Number.isInteger(trustProxy) || trustProxy < 0 || trustProxy > 10) {
   );
 }
 
-// ── JWT configuration ──────────────────────────────────────────────────────
-// JWT_SECRET is required to verify JWT access tokens issued by Better Auth.
-// JWT_ISSUER and JWT_AUDIENCE have safe defaults but may be overridden.
-const jwtSecret = process.env.JWT_SECRET;
-if (!jwtSecret) {
-  missing.push("JWT_SECRET");
-} else if (jwtSecret.length < 32) {
-  throw new Error(
-    "JWT_SECRET must be at least 32 characters long. " +
-      "Use a high-entropy secret distinct from BETTER_AUTH_SECRET."
-  );
-}
-const jwtIssuer = process.env.JWT_ISSUER ?? "booknook-api";
-const jwtAudience = process.env.JWT_AUDIENCE ?? "booknook-client";
+// The values below match the defaults the JWT plugin derives from baseURL.
+const jwtIssuer = process.env.JWT_ISSUER ?? (betterAuthUrl as string);
+const jwtAudience = process.env.JWT_AUDIENCE ?? (betterAuthUrl as string);
 
 if (missing.length > 0) {
   // Fail fast and safely: never print secret values, only missing key names.
@@ -180,11 +177,15 @@ export const env: EnvConfig = {
   CORS_ORIGIN: corsOrigin,
   CORS_ORIGINS: corsOrigins,
   BETTER_AUTH_SECRET: betterAuthSecret as string,
+  BETTER_AUTH_URL: betterAuthUrl as string,
+  JWT_JWKS_URL:
+    process.env.JWT_JWKS_URL ?? `${betterAuthUrl as string}/jwks`,
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
   RATE_LIMIT_WINDOW_MS: rateLimitWindowMs,
   RATE_LIMIT_MAX: rateLimitMax,
   RATE_LIMIT_WRITE_MAX: rateLimitWriteMax,
   TRUST_PROXY: trustProxy,
-  JWT_SECRET: jwtSecret as string,
   JWT_ISSUER: jwtIssuer,
   JWT_AUDIENCE: jwtAudience,
 };

@@ -7,8 +7,9 @@ export const BOOKS_COLLECTION = "books";
 export const BORROWS_COLLECTION = "borrows";
 
 /**
- * Better Auth (v1.7.14, mongodbAdapter) owns these collections in the same
- * database. They are read-only for this backend — never write to them.
+ * Better Auth (v1.7.14, mongodbAdapter) owns these collections. API identity
+ * lookups read the user collection; session and account writes are handled by
+ * Better Auth's adapter, never by REST controllers.
  */
 export const BETTER_AUTH_USER_COLLECTION = "user";
 export const BETTER_AUTH_SESSION_COLLECTION = "session";

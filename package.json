@@ -11,21 +11,23 @@
     "verify:models": "tsx scripts/verify-data-models.ts",
     "verify:auth": "tsx scripts/verify-auth.ts",
     "verify:books": "tsx scripts/verify-books.ts",
-    "verify:create": "tsx scripts/verify-create-book.ts",
-    "verify:manage": "tsx scripts/verify-manage-book.ts",
-    "verify:borrows": "tsx scripts/verify-borrow.ts",
+    "verify:create": "npm run verify:integration",
+    "verify:manage": "npm run verify:integration",
+    "verify:borrows": "npm run verify:integration",
     "verify:integration": "tsx scripts/verify-integration.ts",
-    "verify:security": "tsx scripts/verify-security.ts",
-    "verify": "npm run build && npm run verify:models && npm run verify:auth && npm run verify:books && npm run verify:create && npm run verify:manage && npm run verify:borrows && npm run verify:security"
+    "verify:security": "npm run verify:integration",
+    "verify": "npm run build && npm run verify:models && npm run verify:auth && npm run verify:integration"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "better-auth": "^1.7.14",
     "cors": "^2.8.6",
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
+    "jose": "^6.2.15",
     "mongodb": "^7.8.0",
     "zod": "^4.6.7"
   },

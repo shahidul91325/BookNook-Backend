@@ -1,6 +1,6 @@
 # BookNook Backend
 
-Express.js + MongoDB REST API for the BookNook library application. Handles book catalog management, borrowing/returning, and user-specific book & borrow lists with Better Auth session authentication.
+Express.js + MongoDB API for BookNook. Express hosts Better Auth and the REST API, including book management and borrowing.
 
 **Frontend:** [BookNook-Web](https://github.com/shahidul91325/BookNook-Web) (Next.js)
 **API Base URL:** `http://localhost:5000` (development) — set via `NEXT_PUBLIC_API_URL` on the frontend.
@@ -17,7 +17,7 @@ Express.js + MongoDB REST API for the BookNook library application. Handles book
 - **Borrow book** — reserve a copy atomically; prevents duplicate active borrows per user per book
 - **My Borrows** — authenticated user's borrow history only
 - **Return book** — mark a borrow as returned and restore the copy exactly once
-- **Better Auth authentication** — session cookie + bearer token verification; HMAC-signed, revocation-aware
+- **Better Auth authentication** — cookie-backed sessions, JWT plugin, and JWKS-based REST verification
 - **Protected routes** — all write routes and user-specific reads require a verified session (401/403 otherwise)
 - **Inventory consistency** — conditional copy reservation/restore, transactional with fallback for standalone MongoDB
 - **Rate limiting** — global and stricter write-endpoint buckets per client IP
@@ -36,7 +36,7 @@ Express.js + MongoDB REST API for the BookNook library application. Handles book
 | Database | MongoDB (Atlas / local) |
 | ODM | Native MongoDB driver |
 | Validation | Zod 4 |
-| Authentication | Better Auth (session-based, mongodbAdapter) |
+| Authentication | Better Auth (Express server, MongoDB adapter, JWT/JWKS plugin) |
 | Build | `tsc` |
 | Dev server | `tsx watch` |
 | Testing | Custom HTTP integration scripts (`tsx`) |
@@ -77,7 +77,7 @@ BookNook-Server/
     │   ├── book.controller.ts
     │   └── borrow.controller.ts
     ├── middleware/
-    │   ├── auth.ts       # Better Auth session verification (createRequireAuth)
+    │   ├── auth.ts       # Better Auth JWT verification (createRequireAuth)
     │   ├── errorHandler.ts # Centralized error envelope
     │   ├── rateLimit.ts  # Per-IP rate limiting
     │   └── validate.ts   # Zod body + ObjectId validation
@@ -125,16 +125,20 @@ cp .env.example .env
 |---|---|---|
 | `NODE_ENV` | `development` \| `production` \| `test` | `development` |
 | `PORT` | Server port | `5000` |
-| `MONGODB_URI` | MongoDB connection string | `mongodb+srv://user:pass@cluster.mongodb.net/booknook` |
-| `DB_NAME` | Database name (shared with frontend Better Auth) | `booknook` |
+| `MONGODB_URI` | MongoDB connection string; standalone local Mongo must include `retryWrites=false` | URI with credentials |
+| `DB_NAME` | MongoDB database used by Express, including Better Auth collections | `booknook` |
 | `CORS_ORIGIN` | Comma-separated exact frontend origins | `http://localhost:3000` |
-| `BETTER_AUTH_SECRET` | HMAC secret, byte-identical to frontend `.env.local` (min 32 chars) | `...` |
-| `FRONTEND_URL` | Fallback CORS origin | `http://localhost:3000` |
-| `BETTER_AUTH_URL` | Better Auth base URL | `http://localhost:3000` |
+| `BETTER_AUTH_SECRET` | Express Better Auth secret (min 32 chars; server-only) | `<secret>` |
+| `BETTER_AUTH_URL` | Frontend origin plus `/api/auth` base path used by the JWT issuer | `http://localhost:3000/api/auth` |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID for the frontend callback | `<client-id>` |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | `<client-secret>` |
+| `JWT_ISSUER` | JWT issuer; defaults to `BETTER_AUTH_URL` | `http://localhost:3000/api/auth` |
+| `JWT_AUDIENCE` | JWT audience; defaults to `BETTER_AUTH_URL` | `http://localhost:3000/api/auth` |
+| `JWT_JWKS_URL` | Direct Express JWT plugin JWKS endpoint; defaults to `BETTER_AUTH_URL/jwks` | `http://localhost:5000/api/auth/jwks` |
 
 Optional: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WRITE_MAX`, `TRUST_PROXY` (defaults apply).
 
-**Important:** `BETTER_AUTH_SECRET` must match the frontend's Next.js `.env.local` exactly, or all authenticated requests fail with 401. `.env` is gitignored — never commit real values.
+`.env` is gitignored — never commit real values. The frontend does not receive the Better Auth secret, Google client secret, or MongoDB credentials.
 
 ---
 
@@ -148,12 +152,8 @@ Optional: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WRITE_MAX`, `TRU
 | `npm run verify` | Full verification: build + all test suites |
 | `npm run verify:models` | Data model verification |
 | `npm run verify:auth` | Better Auth verification |
-| `npm run verify:books` | Book read API verification |
-| `npm run verify:create` | Book creation verification |
-| `npm run verify:manage` | Book update/delete verification |
-| `npm run verify:borrows` | Borrow/return verification |
-| `npm run verify:security` | Security & error-handling verification |
-| `npm run verify:integration` | Full frontend↔backend integration verification |
+| `npm run verify:integration` | Authenticated add/edit/delete, owner isolation, borrow/return, and inventory verification |
+| `npm run verify:create`, `verify:manage`, `verify:borrows`, `verify:security` | Compatibility aliases for the integration suite |
 
 ---
 
@@ -174,7 +174,7 @@ npm start
 
 Base URL: `http://localhost:5000` (set `NEXT_PUBLIC_API_URL` on the frontend)
 
-All write endpoints and user-specific reads require a valid Better Auth session (cookie or `Authorization: Bearer <token>`).
+All write endpoints and user-specific reads require a valid Better Auth JWT in `Authorization: Bearer <token>`.
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
@@ -187,7 +187,6 @@ All write endpoints and user-specific reads require a valid Better Auth session 
 | `POST` | `/api/borrows` | Yes | Borrow a book (body: `bookId`, `returnDate?`) |
 | `GET` | `/api/borrows` | Yes | List your borrow records only |
 | `DELETE` | `/api/borrows/:id` | Yes | Return a borrowed book (PUT/PATCH `/:id/return` aliases also accepted) |
-| `GET` | `/api/auth/me` | Yes | Return the verified caller's identity |
 | `GET` | `/api/my-books` | Yes | Alias for your own books (`/api/books/my`, `/api/books/user` also accepted) |
 | `GET` | `/api/my-borrows` | Yes | Alias for your borrows (`/api/borrows/my`, `/api/borrows/user` also accepted) |
 
@@ -203,19 +202,9 @@ All write endpoints and user-specific reads require a valid Better Auth session 
 
 ## Authentication
 
-The backend does **not** issue sessions — it verifies sessions created by the Next.js frontend running Better Auth 1.7.14 with the `mongodbAdapter` against the **same MongoDB database**.
+Express hosts the sole Better Auth instance at `/api/auth`, backed by its MongoDB adapter. Next.js forwards the frontend-origin `/api/auth/*` path to this Express handler, so the browser keeps the server-issued httpOnly session cookie on the frontend host. Email/password and Google OAuth are configured by this server.
 
-1. Better Auth issues an opaque, high-entropy session token stored in the `session` collection.
-2. The client receives an HMAC-SHA256-signed `better-auth.session_token` cookie (or `__Secure-…` over HTTPS).
-3. The frontend sends requests with `credentials: "include"`, so the signed cookie rides along to this API (CORS is `credentials: true`).
-4. This Express server:
-   - Extracts the token from the cookie or `Authorization: Bearer` header
-   - Cryptographically verifies the HMAC signature with the shared `BETTER_AUTH_SECRET`
-   - Looks the token up in the `session` collection (single source of truth — revocation-aware, expiry-aware)
-   - Loads the referenced user and attaches a server-derived `AuthenticatedContext` to `req.auth`
-5. Client-supplied identity fields (`userId`, `email`, `addedBy`, etc.) in body/query/headers are **never** trusted as identity.
-
-`BETTER_AUTH_SECRET` must be byte-identical between backend `.env` and frontend `.env.local`.
+The frontend obtains access tokens from the official JWT plugin `GET /api/auth/token` endpoint. The plugin signs JWTs with its managed asymmetric key pair and publishes public keys at `/api/auth/jwks`. Protected REST requests send `Authorization: Bearer <JWT>`; Express verifies signature via that JWKS plus `exp`, issuer, and audience, then loads the subject user from MongoDB. Client-supplied IDs, emails, and roles never establish identity. `BETTER_AUTH_SECRET` stays server-only and is not reused as a JWT signing secret.
 
 ---
 
@@ -254,17 +243,22 @@ This backend is configured for **Vercel native Express deployment**. There is no
 | `NODE_ENV` | `production` | Yes |
 | `PORT` | Any value (ignored by serverless runtime, but `env.ts` requires it) | Yes |
 | `MONGODB_URI` | MongoDB Atlas connection string | Yes |
-| `DB_NAME` | Database name (shared with frontend Better Auth) | Yes |
+| `DB_NAME` | Database used by Express and its Better Auth adapter | Yes |
 | `CORS_ORIGIN` | Production frontend URL (exact origin, no wildcard) | Yes |
-| `BETTER_AUTH_SECRET` | HMAC secret, byte-identical to frontend `.env.local` (min 32 chars) | Yes |
-| `FRONTEND_URL` | Fallback CORS origin | No |
-| `BETTER_AUTH_URL` | Better Auth base URL | No |
+| `BETTER_AUTH_SECRET` | Express Better Auth secret (min 32 chars) | Yes |
+| `BETTER_AUTH_URL` | Frontend origin plus `/api/auth` | Yes |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID | Yes for Google login |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | Yes for Google login |
+| `JWT_ISSUER` | JWT issuer; defaults to `BETTER_AUTH_URL` | No |
+| `JWT_AUDIENCE` | JWT audience; defaults to `BETTER_AUTH_URL` | No |
+| `JWT_JWKS_URL` | Direct Express `/api/auth/jwks` endpoint | No |
 
 ### Critical Vercel settings
 
 - **MongoDB Atlas IP whitelist:** Add Vercel's outbound IP ranges to your Atlas cluster's Network Access list, or serverless function connections will fail.
 - **`CORS_ORIGIN`:** Must be your production frontend URL (e.g. `https://booknook.vercel.app`). Wildcards are rejected because credentials are enabled.
-- **`BETTER_AUTH_SECRET`:** Must match the frontend's Next.js `.env.local` exactly, or all authenticated requests fail with 401.
+- **`AUTH_SERVER_URL` on Next.js:** Set to this Express deployment's `/api/auth` URL. The frontend public auth base remains `/api/auth`.
+- **`BETTER_AUTH_URL`:** Set to the public frontend origin plus `/api/auth`; it must match the JWT issuer and audience defaults and the Google callback origin.
 
 ### Local development
 

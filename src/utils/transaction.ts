@@ -22,7 +22,8 @@ const isTransactionUnsupported = (error: unknown): boolean => {
   const message = err?.message ?? "";
   return (
     message.includes("Transaction numbers are only allowed") ||
-    message.includes("does not support transactions")
+    message.includes("does not support transactions") ||
+    message.includes("does not support retryable writes")
   );
 };
 

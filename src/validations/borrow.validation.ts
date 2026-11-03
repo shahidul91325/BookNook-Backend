@@ -5,11 +5,9 @@ import { MAX_BORROW_DAYS } from "../repositories/borrow.repository.js";
  * Zod validation for POST /api/borrows.
  *
  * SECURITY: the schema declares ONLY `bookId` and an optional `returnDate`.
- * The frontend also sends `bookTitle`, `bookImage`, `userName`, and
- * `userEmail` — Zod strips them silently. The server takes the book's
- * title/image from the MongoDB document it fetched itself, and the
- * borrower's identity from the verified session, so none of it can be
- * spoofed through the request body.
+ * The server takes the book's title/image from the MongoDB document it
+ * fetched itself and the borrower's identity from the verified JWT, so
+ * neither can be spoofed through the request body.
  */
 
 const objectIdPattern = /^[0-9a-fA-F]{24}$/;

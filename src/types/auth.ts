@@ -2,7 +2,7 @@
  * Strongly typed shapes for a verified (server-side authenticated) user.
  *
  * These types describe the IDENTITY THE SERVER ITSELF resolved from a
- * cryptographically verified Better Auth session — never data supplied
+ * cryptographically verified Better Auth JWT — never data supplied
  * by the client. See `src/services/auth.service.ts` for the verification
  * flow.
  */
@@ -15,15 +15,14 @@ export interface AuthenticatedUser {
   email: string;
   emailVerified: boolean;
   image: string | null;
-  /** User role — "admin" or "user". Defaults to "user". Only admins may
-   *  create, update, or delete books. Extracted exclusively from verified
-   *  authentication data (session or JWT), never from client input. */
+  /** User role — "admin" or "user". Defaults to "user". Loaded from the
+   *  database after JWT subject verification, never from client input. */
   role: "admin" | "user";
   createdAt: Date;
   updatedAt: Date;
 }
 
-/** The verified session the user id was resolved from. */
+/** The verified JWT's subject and expiration represented as a session view. */
 export interface AuthenticatedSession {
   /** MongoDB `_id` of the session document. */
   id: string;
@@ -42,7 +41,7 @@ declare global {
     interface Request {
       /**
        * Present only after a successful verified authentication.
-       * Always derived server-side from the Better Auth session store —
+       * Always derived server-side from the verified JWT subject —
        * client-provided identity fields are never copied in here.
        */
       auth?: AuthenticatedContext;
