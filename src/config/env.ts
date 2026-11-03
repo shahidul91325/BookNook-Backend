@@ -90,7 +90,10 @@ if (!betterAuthUrl) {
       throw new Error();
     }
   } catch {
-    throw new Error("BETTER_AUTH_URL must be an http(s) frontend URL ending in /api/auth.");
+    throw new Error(
+      "BETTER_AUTH_URL must be the public frontend URL including the auth path, " +
+        "for example https://your-frontend.vercel.app/api/auth (no query or fragment)."
+    );
   }
 }
 

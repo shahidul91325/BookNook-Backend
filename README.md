@@ -1,294 +1,195 @@
-# BookNook Backend
+# 📚 BookNook Backend — REST API
 
-Express.js + MongoDB API for BookNook. Express hosts Better Auth and the REST API, including book management and borrowing.
+<p align="center">
+  <img src="./docs/images/booknook-preview.png" alt="BookNook Project Preview" width="100%" />
+</p>
 
-**Frontend:** [BookNook-Web](https://github.com/shahidul91325/BookNook-Web) (Next.js)
-**API Base URL:** `http://localhost:5000` (development) — set via `NEXT_PUBLIC_API_URL` on the frontend.
+<p align="center">
+  <strong>Powering the BookNook Online Library</strong>
+</p>
 
----
+<p align="center">
+  <a href="https://book-nook-web.vercel.app/">Live Website</a> •
+  <a href="https://github.com/shahidul91325/BookNook-Web">Frontend Repository</a> •
+  <a href="https://github.com/shahidul91325/BookNook-Backend">Backend Repository</a>
+</p>
 
-## Features
+## 📖 About
 
-- **Books catalog** — public listing with category filter, search, sort, and pagination
-- **Book details** — public read of a single book by ID
-- **Add book** — authenticated users add books; ownership recorded server-side from the verified session
-- **Edit / delete book** — only the book's owner (verified session user) may modify or remove it
-- **My Books** — authenticated user's own book list
-- **Borrow book** — reserve a copy atomically; prevents duplicate active borrows per user per book
-- **My Borrows** — authenticated user's borrow history only
-- **Return book** — mark a borrow as returned and restore the copy exactly once
-- **Better Auth authentication** — cookie-backed sessions, JWT plugin, and JWKS-based REST verification
-- **Protected routes** — all write routes and user-specific reads require a verified session (401/403 otherwise)
-- **Inventory consistency** — conditional copy reservation/restore, transactional with fallback for standalone MongoDB
-- **Rate limiting** — global and stricter write-endpoint buckets per client IP
-- **CORS hardening** — exact-origin allowlist only; no wildcards; credentials enabled
-- **Standard error envelopes** — `{status, message[, errors]}`; no stack traces or driver internals leaked to clients
+BookNook Backend is a RESTful API built with Express.js, TypeScript, and MongoDB. It powers the BookNook online library by handling book management, borrowing operations, inventory tracking, authentication, and secure API authorization.
 
----
+The backend provides protected endpoints and user-specific data access to ensure that users can manage their own books and borrowing records securely.
 
-## Technology Stack
+## ✨ Features
 
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js (ES modules) |
-| Framework | Express 5 |
-| Language | TypeScript (strict) |
-| Database | MongoDB (Atlas / local) |
-| ODM | Native MongoDB driver |
-| Validation | Zod 4 |
-| Authentication | Better Auth (Express server, MongoDB adapter, JWT/JWKS plugin) |
-| Build | `tsc` |
-| Dev server | `tsx watch` |
-| Testing | Custom HTTP integration scripts (`tsx`) |
+- 📚 **Book Management:** Create, read, update, and delete books.
+- 🔐 **JWT Authentication:** Verify JWT tokens for protected API operations.
+- 👤 **User Authorization:** Identify users through verified JWT claims.
+- 🔄 **Borrow System:** Borrow and return books.
+- 📦 **Inventory Management:** Track total and available copies.
+- 🚫 **Duplicate Borrow Prevention:** Prevent simultaneous duplicate borrowing of the same book by one user.
+- 🔒 **Ownership Validation:** Protect user-specific book operations.
+- ✅ **Request Validation:** Validate request bodies and MongoDB ObjectIds.
+- 🗄️ **MongoDB Integration:** Store books and borrowing records.
 
----
+## 🛠️ Tech Stack
 
-## Folder Structure
+| Technology  | Purpose                       |
+| ----------- | ----------------------------- |
+| Node.js     | Runtime environment           |
+| Express.js  | REST API framework            |
+| TypeScript  | Type safety                   |
+| MongoDB     | Database                      |
+| Better Auth | Authentication                |
+| JWT         | API authorization             |
+| Zod         | Request validation            |
+| CORS        | Cross-origin request handling |
 
-```
-BookNook-Server/
-├── .env                  # Local secrets (gitignored — never commit)
-├── .env.example          # Template for .env (committed)
-├── .gitignore
-├── package.json
-├── package-lock.json
-├── server.ts             # Vercel native Express entry point (default export)
-├── tsconfig.json
-├── README.md
-├── dist/                 # Compiled output (gitignored)
-├── scripts/              # Verification scripts (not runtime code)
-│   ├── verify-auth.ts
-│   ├── verify-books.ts
-│   ├── verify-data-models.ts
-│   ├── verify-integration.ts
-│   └── verify-security.ts
-└── src/
-    ├── app.ts            # Express app factory + route registration
-    ├── server.ts         # Entry point: connects DB, ensures indexes, listens
-    ├── config/
-    │   ├── db.ts         # MongoDB connection
-    │   ├── env.ts        # Validated environment config
-    │   ├── collections.ts # Collection accessors
-    │   └── indexes.ts    # Index creation
-    ├── controllers/
-    │   ├── book.controller.ts
-    │   └── borrow.controller.ts
-    ├── middleware/
-    │   ├── auth.ts       # Better Auth JWT verification (createRequireAuth)
-    │   ├── errorHandler.ts # Centralized error envelope
-    │   ├── rateLimit.ts  # Per-IP rate limiting
-    │   └── validate.ts   # Zod body + ObjectId validation
-    ├── models/
-    │   ├── book.model.ts
-    │   ├── borrow.model.ts
-    │   └── auth.model.ts
-    ├── repositories/
-    │   ├── book.repository.ts
-    │   └── borrow.repository.ts
-    ├── services/
-    │   └── auth.service.ts
-    ├── types/
-    │   └── auth.ts
-    └── utils/
-        ├── date.ts
-        ├── errors.ts
-        ├── escapeRegex.ts
-        ├── httpResponse.ts
-        ├── logger.ts     # Secret-scrubbed logging
-        ├── objectId.ts
-        └── transaction.ts
-```
+## 🔌 API Endpoints
 
----
+### Books API
 
-## Installation
+| Method | Endpoint     | Description            |
+| ------ | ------------ | ---------------------- |
+| GET    | `/api/books`     | Retrieve all books     |
+| GET    | `/api/books/:id` | Retrieve a single book |
+| POST   | `/api/books`     | Create a new book      |
+| PATCH  | `/api/books/:id` | Update a book          |
+| DELETE | `/api/books/:id` | Delete a book          |
+
+### Borrows API
+
+| Method | Endpoint       | Description                                  |
+| ------ | -------------- | -------------------------------------------- |
+| POST   | `/api/borrows`     | Borrow a book                                |
+| GET    | `/api/borrows`     | Retrieve authenticated user's borrowed books |
+| DELETE | `/api/borrows/:id` | Return a borrowed book                       |
+
+**Authentication:** Protected endpoints require a valid JWT Bearer token.
+
+## 🚀 Installation
+
+### 1. Clone the repository
 
 ```bash
-# Clone the repository
 git clone https://github.com/shahidul91325/BookNook-Backend.git
 cd BookNook-Backend
+```
 
-# Install dependencies
+### 2. Install dependencies
+
+```bash
 npm install
-
-# Copy the environment template and fill in real values
-cp .env.example .env
-# Edit .env with your MongoDB URI, Better Auth secret, frontend auth URL, and direct JWKS URL.
 ```
 
-### Required environment variables
+### 3. Configure environment variables
 
-| Variable | Description | Example |
-|---|---|---|
-| `NODE_ENV` | `development` \| `production` \| `test` | `development` |
-| `PORT` | Server port | `5000` |
-| `MONGODB_URI` | MongoDB connection string; standalone local Mongo must include `retryWrites=false` | URI with credentials |
-| `MONGODB_DB_NAME` | MongoDB database used by Express, including Better Auth collections | `booknook` |
-| `BETTER_AUTH_SECRET` | Express Better Auth secret (min 32 chars; server-only) | `<secret>` |
-| `BETTER_AUTH_URL` | Canonical frontend auth URL and JWT issuer/audience, ending in `/api/auth` | `http://localhost:3000/api/auth` |
-| `JWT_JWKS_URL` | Direct Express JWKS endpoint used for JWT verification | `http://localhost:5000/api/auth/jwks` |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID for the frontend callback (optional) | `<client-id>` |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret (optional) | `<client-secret>` |
+Create a `.env` file:
 
-Optional: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WRITE_MAX`, `TRUST_PROXY` (defaults apply).
+```env
+PORT=5000
+NODE_ENV=development
 
-`.env` is gitignored — never commit real values. The frontend does not receive the Better Auth secret, Google client secret, or MongoDB credentials.
+MONGODB_URI=your_mongodb_connection_string
+MONGODB_DB_NAME=booknook
 
----
+BETTER_AUTH_SECRET=your_better_auth_secret
+BETTER_AUTH_URL=http://localhost:3000/api/auth
+JWT_JWKS_URL=http://localhost:5000/api/auth/jwks
 
-## Development Commands
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+```
 
-| Command | Purpose |
-|---|---|
-| `npm run dev` | Start dev server with `tsx watch` |
-| `npm run build` | Compile TypeScript to `dist/` |
-| `npm start` | Run compiled server (`node dist/server.js`) |
-| `npm run verify` | Full verification: build + all test suites |
-| `npm run verify:models` | Data model verification |
-| `npm run verify:books` | Public book catalog and details API verification |
-| `npm run verify:auth` | Better Auth verification |
-| `npm run verify:integration` | Authenticated add/edit/delete, owner isolation, borrow/return, and inventory verification |
-| `npm run verify:security` | CORS, validation, rate limiting, ownership, error handling, and leak checks |
-| `npm run verify:create`, `verify:manage`, `verify:borrows` | Compatibility aliases for the integration suite |
+**Important:**
 
----
+- Never commit `.env` files or expose private credentials.
+- Use the correct frontend URL for `BETTER_AUTH_URL`.
+- Configure the backend JWKS URL for JWT verification.
+- Google OAuth credentials are needed when Google sign-in is enabled.
+- Use production URLs and environment variables when deploying.
 
-## Build and Start
+### 4. Run the development server
 
 ```bash
-# Development
 npm run dev
-
-# Production build + start
-npm run build
-npm start
 ```
 
----
+The backend runs at:
 
-## API Endpoints
+http://localhost:5000
 
-Base URL: `http://localhost:5000` (set `NEXT_PUBLIC_API_URL` on the frontend)
-
-All write endpoints and user-specific reads require a valid Better Auth JWT in `Authorization: Bearer <token>`.
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| `GET` | `/api/health` | No | Health check |
-| `GET` | `/api/books` | No | List books (category, search, sort, page, limit) |
-| `GET` | `/api/books/:id` | No | Get a single book by ID |
-| `POST` | `/api/books` | Yes | Create a book (body: `title`, `author`, `category`, `image`, `quantity`, `description`, `rating?`) |
-| `PATCH` | `/api/books/:id` | Yes | Update a book you own |
-| `DELETE` | `/api/books/:id` | Yes | Delete a book you own (409 if active borrows exist) |
-| `POST` | `/api/borrows` | Yes | Borrow a book (body: `bookId`, `returnDate?`) |
-| `GET` | `/api/borrows` | Yes | List your borrow records only |
-| `DELETE` | `/api/borrows/:id` | Yes | Return a borrowed book |
-| `GET` | `/api/my-books` | Yes | List books owned by the authenticated user |
-
-### Response envelopes
-
-**Success:** `{ "status": "success", ...payload }`
-
-**Failure (4xx):** `{ "status": "fail", "message": "…", "errors?: {...} }`
-
-**Error (5xx):** `{ "status": "error", "message": "Something went wrong on the server." }`
-
----
-
-## Authentication
-
-Express hosts the sole Better Auth instance at `/api/auth`, backed by its MongoDB adapter. Next.js forwards the frontend-origin `/api/auth/*` path to this Express handler, so the browser keeps the server-issued httpOnly session cookie on the frontend host. Email/password and Google OAuth are configured by this server.
-
-The frontend obtains access tokens from the official JWT plugin `GET /api/auth/token` endpoint. The plugin signs JWTs with its managed asymmetric key pair and publishes public keys at `/api/auth/jwks`. Protected REST requests send `Authorization: Bearer <JWT>`; Express verifies signature via the configured JWKS plus `exp`, issuer, and audience, then loads the subject user from MongoDB. Client-supplied IDs, emails, and roles never establish identity. `BETTER_AUTH_SECRET` stays server-only and is not reused as a JWT signing secret. There is no separate `JWT_SECRET`; the verifier trusts the Better Auth JWKS.
-
----
-
----
-
-## Deployment (Vercel)
-
-This backend is configured for **Vercel native Express deployment**. There is no `vercel.json`, no `dist/server.js` dependency, and no TypeScript compilation step required for deployment.
-
-### Architecture
-
-- **`server.ts`** (root) — Vercel entry point. Creates the Express app and exports it as the default export. Never calls `app.listen()` — Vercel handles request invocation.
-- **`src/app.ts`** — Express app factory (`createApp(db)`), shared by all entry points. Never calls `app.listen()`.
-- **`src/server.ts`** — Local development entry point. Imports `createApp`, connects MongoDB, and calls `app.listen()`. Used by `npm run dev` only.
-
-### How Vercel deploys this
-
-1. Vercel detects the default Express export from root `server.ts`.
-2. Vercel wraps it in a serverless function automatically (native Express support).
-3. No `vercel.json` is needed — no rewrites, no custom output directory, no build override.
-4. Install command: `npm ci` (automatic package-manager detection).
-5. Build command: Default / none required.
-
-### Required steps
-
-1. **Connect the repo** to Vercel as a project (Import → select `BookNook-Backend`).
-2. **Root Directory:** Backend project root (where `package.json` and `server.ts` live).
-3. **Framework:** Express — Vercel detects it automatically.
-4. **Build Command:** Leave default (no override needed).
-5. **Output Directory:** Leave default (no override needed).
-6. **Install Command:** Leave default (`npm ci` is detected automatically).
-7. **Set environment variables** in the Vercel project dashboard (do **not** commit `.env`):
-
-| Variable | Description | Required |
-|---|---|---|
-| `NODE_ENV` | `production` (provided by Vercel) | No |
-| `PORT` | Local listener port; unused by Vercel's serverless runtime | No |
-| `MONGODB_URI` | MongoDB Atlas connection string | Yes |
-| `MONGODB_DB_NAME` | Database used by Express and its Better Auth adapter | Yes |
-| `BETTER_AUTH_SECRET` | Express Better Auth secret (min 32 chars) | Yes |
-| `BETTER_AUTH_URL` | Frontend origin plus `/api/auth` | Yes |
-| `JWT_JWKS_URL` | Direct Express `/api/auth/jwks` endpoint | Yes |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID | Yes for Google login |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | Yes for Google login |
-
-### Critical Vercel settings
-
-- **MongoDB Atlas IP whitelist:** Add Vercel's outbound IP ranges to your Atlas cluster's Network Access list, or serverless function connections will fail.
-- **`BETTER_AUTH_URL`:** Set to the public frontend origin plus `/api/auth`; it is also the JWT issuer and audience. CORS and Better Auth trusted origins are derived from it.
-- **`JWT_JWKS_URL`:** Set to the direct backend deployment URL plus `/api/auth/jwks`, avoiding an auth rewrite hop for backend key lookups.
-- **Google OAuth:** Register `<frontend-origin>/api/auth/callback/google` for both the production domain and the stable Preview domain if Google login is enabled.
-
-Production and Preview are configured independently in Vercel. Use a stable
-frontend Preview domain so backend Preview `BETTER_AUTH_URL` and Google
-callback registration match it. If generated preview URLs are used, update
-those settings for each active URL.
-
-### Local development
+### 5. Build the project
 
 ```bash
-# Start local dev server (listens on localhost:5000)
-npm run dev
-
-# Type-check (no emit)
-npx tsc --noEmit
-
-# Production build (generates dist/ for local testing only)
 npm run build
-
-# Run compiled server locally
-npm start
 ```
 
-> **Note:** Test `GET /`, `GET /api/health`, and `GET /api/testimonials` first — these respond even if MongoDB is temporarily unavailable.
+## 🔐 Authentication & Security
+
+- Better Auth handles authentication.
+- JWT tokens authorize protected API requests.
+- Tokens are verified using the configured JWKS endpoint.
+- User identity is extracted from verified token claims.
+- Client-provided user IDs and emails are not trusted for ownership.
+- Protected operations enforce authentication and authorization.
+- Request validation helps prevent invalid database operations.
+
+## 🗄️ Database & Inventory
+
+MongoDB stores book information and borrowing records.
+
+The inventory system tracks:
+
+- Total copies of each book.
+- Available copies.
+- Borrowing records.
+- Borrow dates and return dates.
+
+When a user borrows a book, available inventory decreases. When a book is returned, available inventory increases.
+
+The API also prevents users from borrowing the same book multiple times simultaneously.
+
+## 📁 Project Structure
+
+```text
+BookNook-Backend/
+├── src/
+│   ├── config/
+│   ├── middleware/
+│   ├── models/
+│   ├── routes/
+│   └── app.ts
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+## 🔗 Frontend Integration
+
+The backend powers the BookNook Next.js frontend.
+
+**Frontend Repository:**  
+https://github.com/shahidul91325/BookNook-Web
+
+**Live Website:**  
+https://book-nook-web.vercel.app/
+
+## 🌐 Deployment
+
+The backend is designed to run as an Express.js API and can be deployed using platforms such as Vercel.
+
+Configure all required production environment variables before deployment, including MongoDB, Better Auth, Google OAuth (if enabled), and JWT settings.
+
+## 👨‍💻 Developer
+
+**Md. Shahidul Islam**
+
+- GitHub: https://github.com/shahidul91325
+- LinkedIn: https://www.linkedin.com/in/shahidul91325/
 
 ---
 
-## Security
-
-- CORS allowlist: exact origins only; wildcards rejected at startup
-- Credentials enabled only for listed origins
-- Rate limiting: global + stricter write buckets per client IP
-- No secrets in responses; stack traces and driver errors are logged server-side only
-- `BETTER_AUTH_SECRET` and `MONGODB_URI` are never logged or echoed
-- Ownership enforced server-side from verified session; query-level guards on every write
-- Partial unique index prevents duplicate active borrows per user per book
-
----
-
-## License
-
-ISC
+<p align="center">
+  Built with ❤️ using Express.js, TypeScript, MongoDB, and Better Auth.
+</p>
