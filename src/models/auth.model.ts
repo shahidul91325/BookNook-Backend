@@ -13,6 +13,9 @@ export type BetterAuthUser = {
   email: string;
   emailVerified: boolean;
   image?: string | null;
+  /** User role — "admin" or "user". Defaults to "user". Set in the user
+   *  document by an administrator; never writable by the user themselves. */
+  role?: "admin" | "user";
   createdAt: Date;
   updatedAt: Date;
 };

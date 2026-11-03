@@ -2,7 +2,7 @@ import express, { type Express, type Request, type Response } from 'express';
 import cors, { type CorsOptions } from 'cors';
 import type { Db } from 'mongodb';
 import { env } from './config/env.js';
-import { createRequireAuth } from './middleware/auth.js';
+import { createRequireAuth, createRequireAdmin } from './middleware/auth.js';
 import { validateBody, validateObjectId } from './middleware/validate.js';
 import { createRateLimit, type RateLimitOptions } from './middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
@@ -148,6 +148,7 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   // Middleware order on writes: rate limit → auth → id check → body check,
   // preserving the response precedence 429 → 401 → 400 → 404 → 403.
   const requireAuth = createRequireAuth(db);
+  const requireAdmin = createRequireAdmin();
 
   // Returns the identity the SERVER verified for the caller. The client
   // cannot influence any field of this response.
@@ -158,7 +159,7 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   // Create a book. `requireAuth` establishes identity from the verified
   // Better Auth session; `validateBody` strips ownership fields from the
   // body so they can never reach the document.
-  app.post('/api/books', writeLimiter, requireAuth, validateBody(createBookSchema), createCreateBook(db));
+  app.post('/api/books', writeLimiter, requireAuth, requireAdmin, validateBody(createBookSchema), createCreateBook(db));
 
   // ── My Books (owner list) ──────────────────────────────────────────────
   // The frontend's getMyBooks() tries /api/my-books first, then falls back
@@ -186,10 +187,10 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   // bookService.updateBook() sends PUT. Both verbs share the same handler
   // so the API contract holds for either caller. DELETE matches the
   // frontend's bookService.deleteBook() exactly.
-  const updateGuards = [writeLimiter, requireAuth, validateObjectId('book'), validateBody(updateBookSchema)] as const;
+  const updateGuards = [writeLimiter, requireAdmin, validateObjectId('book'), validateBody(updateBookSchema)] as const;
   app.patch('/api/books/:id', ...updateGuards, createUpdateBook(db));
   app.put('/api/books/:id', ...updateGuards, createUpdateBook(db));
-  app.delete('/api/books/:id', writeLimiter, requireAuth, validateObjectId('book'), createDeleteBook(db));
+  app.delete('/api/books/:id', writeLimiter, requireAdmin, validateObjectId('book'), createDeleteBook(db));
 
   // ── Borrowing & returning ──────────────────────────────────────────────
   // POST /api/borrows reserves a copy atomically and records the borrow.

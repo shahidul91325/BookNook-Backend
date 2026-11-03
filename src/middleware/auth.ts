@@ -4,6 +4,7 @@ import { authenticateRequest } from "../services/auth.service.js";
 import type { AuthenticatedContext } from "../types/auth.js";
 import { sendError } from "../utils/httpResponse.js";
 import { logError } from "../utils/logger.js";
+import { createRequireAdmin } from "./admin.js";
 
 /**
  * Reusable authentication/authorization middleware for the BookNook API.
@@ -107,3 +108,6 @@ export const createRequireAuth =
  */
 export const isOwner = (req: Request, ownerId: string): boolean =>
   Boolean(req.auth && req.auth.user.id === ownerId);
+
+/** Re-exported from `./admin.js` for convenient single-import usage. */
+export { createRequireAdmin };

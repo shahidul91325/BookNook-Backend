@@ -5,6 +5,10 @@ import {
   getAuthUsersCollection,
 } from "../config/collections.js";
 import { env } from "../config/env.js";
+import {
+  resolveAuthenticatedUserFromJWT,
+  verifyJwt,
+} from "./jwt.service.js";
 import type {
   AuthenticatedContext,
   AuthenticatedUser,
@@ -175,6 +179,7 @@ const toAuthenticatedUser = (doc: {
   email: string;
   emailVerified: boolean;
   image?: string | null;
+  role?: "admin" | "user";
   createdAt: Date;
   updatedAt: Date;
 }): AuthenticatedUser => ({
@@ -183,6 +188,7 @@ const toAuthenticatedUser = (doc: {
   email: doc.email,
   emailVerified: doc.emailVerified,
   image: doc.image ?? null,
+  role: doc.role ?? "user",
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt,
 });
@@ -251,6 +257,33 @@ export const authenticateRequest = async (
   cookieHeader: string | undefined,
   authorizationHeader: string | undefined
 ): Promise<AuthenticatedContext | null> => {
+  // ── JWT access-token path (Authorization: Bearer <jwt>) ──────────────────
+  // Better Auth can issue JWT access tokens. A JWT has exactly three
+  // base64url parts separated by dots. If the Bearer token looks like a JWT,
+  // verify it cryptographically (signature, exp, iss, aud) and resolve the
+  // user from the verified payload — no session-collection lookup needed.
+  if (authorizationHeader) {
+    const scheme = authorizationHeader.slice(0, 7).toLowerCase();
+    if (scheme === "bearer ") {
+      const raw = authorizationHeader.slice(7).trim();
+      if (raw && raw.split(".").length === 3) {
+        const payload = verifyJwt(
+          raw,
+          env.JWT_SECRET,
+          env.JWT_ISSUER,
+          env.JWT_AUDIENCE
+        );
+        if (payload) {
+          return resolveAuthenticatedUserFromJWT(db, payload);
+        }
+        // A malformed/invalid JWT is rejected outright — do not fall
+        // through to opaque-token lookup.
+        return null;
+      }
+    }
+  }
+
+  // ── Existing path: cookie or non-JWT Bearer token (opaque / signed) ─────
   const extracted = extractSessionToken(cookieHeader, authorizationHeader);
   if (!extracted) return null;
   return resolveAuthenticatedUser(db, extracted.token);

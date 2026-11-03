@@ -15,6 +15,10 @@ export interface AuthenticatedUser {
   email: string;
   emailVerified: boolean;
   image: string | null;
+  /** User role — "admin" or "user". Defaults to "user". Only admins may
+   *  create, update, or delete books. Extracted exclusively from verified
+   *  authentication data (session or JWT), never from client input. */
+  role: "admin" | "user";
   createdAt: Date;
   updatedAt: Date;
 }

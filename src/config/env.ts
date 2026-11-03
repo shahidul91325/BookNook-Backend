@@ -38,6 +38,12 @@ export interface EnvConfig {
    * otherwise clients could spoof `X-Forwarded-For` to dodge rate limits.
    */
   TRUST_PROXY: number;
+  /** Secret used to sign and verify JWT access tokens. */
+  JWT_SECRET: string;
+  /** JWT issuer claim — must match the value Better Auth uses when issuing. */
+  JWT_ISSUER: string;
+  /** JWT audience claim — must match the value the API expects. */
+  JWT_AUDIENCE: string;
 }
 
 const missing: string[] = [];
@@ -143,6 +149,21 @@ if (!Number.isInteger(trustProxy) || trustProxy < 0 || trustProxy > 10) {
   );
 }
 
+// ── JWT configuration ──────────────────────────────────────────────────────
+// JWT_SECRET is required to verify JWT access tokens issued by Better Auth.
+// JWT_ISSUER and JWT_AUDIENCE have safe defaults but may be overridden.
+const jwtSecret = process.env.JWT_SECRET;
+if (!jwtSecret) {
+  missing.push("JWT_SECRET");
+} else if (jwtSecret.length < 32) {
+  throw new Error(
+    "JWT_SECRET must be at least 32 characters long. " +
+      "Use a high-entropy secret distinct from BETTER_AUTH_SECRET."
+  );
+}
+const jwtIssuer = process.env.JWT_ISSUER ?? "booknook-api";
+const jwtAudience = process.env.JWT_AUDIENCE ?? "booknook-client";
+
 if (missing.length > 0) {
   // Fail fast and safely: never print secret values, only missing key names.
   throw new Error(
@@ -163,4 +184,7 @@ export const env: EnvConfig = {
   RATE_LIMIT_MAX: rateLimitMax,
   RATE_LIMIT_WRITE_MAX: rateLimitWriteMax,
   TRUST_PROXY: trustProxy,
+  JWT_SECRET: jwtSecret as string,
+  JWT_ISSUER: jwtIssuer,
+  JWT_AUDIENCE: jwtAudience,
 };
