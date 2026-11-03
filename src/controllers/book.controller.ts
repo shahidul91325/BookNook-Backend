@@ -163,7 +163,7 @@ export const createCreateBook =
   };
 
 /**
- * Shared core for PATCH/PUT /api/books/:id — update a book the caller owns.
+ * Update a book through PATCH /api/books/:id when the caller owns it.
  *
  * Ownership is decided by comparing the book's stored `addedBy` (the
  * verified user id written at creation time) with `req.auth.user.id` from

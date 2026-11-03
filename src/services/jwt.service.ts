@@ -25,8 +25,8 @@ export const verifyJwt = async (
 ): Promise<VerifiedJwtPayload | null> => {
   try {
     const { payload } = await jwtVerify(token, getJwks(), {
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
+      issuer: env.BETTER_AUTH_URL,
+      audience: env.BETTER_AUTH_URL,
     });
     if (typeof payload.sub !== "string" || !payload.sub) return null;
     return payload as VerifiedJwtPayload;

@@ -12,9 +12,7 @@ const startServer = async (): Promise<void> => {
     const app = createApp(db);
 
     const server = app.listen(env.PORT, () => {
-      logInfo(
-        `🚀 Server running on http://localhost:${env.PORT} (${env.NODE_ENV})`
-      );
+      logInfo(`🚀 Server listening on port ${env.PORT} (${env.NODE_ENV})`);
     });
 
     const shutdown = (signal: string) => {

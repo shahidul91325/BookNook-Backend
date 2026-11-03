@@ -59,11 +59,8 @@ BookNook-Server/
 ├── scripts/              # Verification scripts (not runtime code)
 │   ├── verify-auth.ts
 │   ├── verify-books.ts
-│   ├── verify-borrow.ts
-│   ├── verify-create-book.ts
 │   ├── verify-data-models.ts
 │   ├── verify-integration.ts
-│   ├── verify-manage-book.ts
 │   └── verify-security.ts
 └── src/
     ├── app.ts            # Express app factory + route registration
@@ -116,7 +113,7 @@ npm install
 
 # Copy the environment template and fill in real values
 cp .env.example .env
-# Edit .env with your MongoDB URI, Better Auth secret, CORS origin, etc.
+# Edit .env with your MongoDB URI, Better Auth secret, frontend auth URL, and direct JWKS URL.
 ```
 
 ### Required environment variables
@@ -127,14 +124,11 @@ cp .env.example .env
 | `PORT` | Server port | `5000` |
 | `MONGODB_URI` | MongoDB connection string; standalone local Mongo must include `retryWrites=false` | URI with credentials |
 | `MONGODB_DB_NAME` | MongoDB database used by Express, including Better Auth collections | `booknook` |
-| `CORS_ORIGIN` | Comma-separated exact frontend origins; preferred over legacy `FRONTEND_URL` | `http://localhost:3000` |
 | `BETTER_AUTH_SECRET` | Express Better Auth secret (min 32 chars; server-only) | `<secret>` |
-| `BETTER_AUTH_URL` | Frontend origin plus `/api/auth` base path used by the JWT issuer | `http://localhost:3000/api/auth` |
+| `BETTER_AUTH_URL` | Canonical frontend auth URL and JWT issuer/audience, ending in `/api/auth` | `http://localhost:3000/api/auth` |
+| `JWT_JWKS_URL` | Direct Express JWKS endpoint used for JWT verification | `http://localhost:5000/api/auth/jwks` |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID for the frontend callback (optional) | `<client-id>` |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret (optional) | `<client-secret>` |
-| `JWT_ISSUER` | JWT issuer; defaults to `BETTER_AUTH_URL` | `http://localhost:3000/api/auth` |
-| `JWT_AUDIENCE` | JWT audience; defaults to `BETTER_AUTH_URL` | `http://localhost:3000/api/auth` |
-| `JWT_JWKS_URL` | Direct Express JWT plugin JWKS endpoint; defaults to `BETTER_AUTH_URL/jwks` | `http://localhost:5000/api/auth/jwks` |
 
 Optional: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WRITE_MAX`, `TRUST_PROXY` (defaults apply).
 
@@ -184,13 +178,12 @@ All write endpoints and user-specific reads require a valid Better Auth JWT in `
 | `GET` | `/api/books` | No | List books (category, search, sort, page, limit) |
 | `GET` | `/api/books/:id` | No | Get a single book by ID |
 | `POST` | `/api/books` | Yes | Create a book (body: `title`, `author`, `category`, `image`, `quantity`, `description`, `rating?`) |
-| `PATCH` | `/api/books/:id` | Yes | Partial update a book you own (PUT alias also accepted) |
+| `PATCH` | `/api/books/:id` | Yes | Update a book you own |
 | `DELETE` | `/api/books/:id` | Yes | Delete a book you own (409 if active borrows exist) |
 | `POST` | `/api/borrows` | Yes | Borrow a book (body: `bookId`, `returnDate?`) |
 | `GET` | `/api/borrows` | Yes | List your borrow records only |
-| `DELETE` | `/api/borrows/:id` | Yes | Return a borrowed book (PUT/PATCH `/:id/return` aliases also accepted) |
-| `GET` | `/api/my-books` | Yes | Alias for your own books (`/api/books/my`, `/api/books/user` also accepted) |
-| `GET` | `/api/my-borrows` | Yes | Alias for your borrows (`/api/borrows/my`, `/api/borrows/user` also accepted) |
+| `DELETE` | `/api/borrows/:id` | Yes | Return a borrowed book |
+| `GET` | `/api/my-books` | Yes | List books owned by the authenticated user |
 
 ### Response envelopes
 
@@ -206,7 +199,7 @@ All write endpoints and user-specific reads require a valid Better Auth JWT in `
 
 Express hosts the sole Better Auth instance at `/api/auth`, backed by its MongoDB adapter. Next.js forwards the frontend-origin `/api/auth/*` path to this Express handler, so the browser keeps the server-issued httpOnly session cookie on the frontend host. Email/password and Google OAuth are configured by this server.
 
-The frontend obtains access tokens from the official JWT plugin `GET /api/auth/token` endpoint. The plugin signs JWTs with its managed asymmetric key pair and publishes public keys at `/api/auth/jwks`. Protected REST requests send `Authorization: Bearer <JWT>`; Express verifies signature via that JWKS plus `exp`, issuer, and audience, then loads the subject user from MongoDB. Client-supplied IDs, emails, and roles never establish identity. `BETTER_AUTH_SECRET` stays server-only and is not reused as a JWT signing secret. There is no separate `JWT_SECRET`: the verifier trusts the Better Auth JWKS, and a `JWT_SECRET` variable has no effect.
+The frontend obtains access tokens from the official JWT plugin `GET /api/auth/token` endpoint. The plugin signs JWTs with its managed asymmetric key pair and publishes public keys at `/api/auth/jwks`. Protected REST requests send `Authorization: Bearer <JWT>`; Express verifies signature via the configured JWKS plus `exp`, issuer, and audience, then loads the subject user from MongoDB. Client-supplied IDs, emails, and roles never establish identity. `BETTER_AUTH_SECRET` stays server-only and is not reused as a JWT signing secret. There is no separate `JWT_SECRET`; the verifier trusts the Better Auth JWKS.
 
 ---
 
@@ -246,28 +239,23 @@ This backend is configured for **Vercel native Express deployment**. There is no
 | `PORT` | Local listener port; unused by Vercel's serverless runtime | No |
 | `MONGODB_URI` | MongoDB Atlas connection string | Yes |
 | `MONGODB_DB_NAME` | Database used by Express and its Better Auth adapter | Yes |
-| `CORS_ORIGIN` | Production frontend URL (exact origin, no wildcard) | Yes |
 | `BETTER_AUTH_SECRET` | Express Better Auth secret (min 32 chars) | Yes |
 | `BETTER_AUTH_URL` | Frontend origin plus `/api/auth` | Yes |
+| `JWT_JWKS_URL` | Direct Express `/api/auth/jwks` endpoint | Yes |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID | Yes for Google login |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | Yes for Google login |
-| `JWT_ISSUER` | JWT issuer; defaults to `BETTER_AUTH_URL` | No |
-| `JWT_AUDIENCE` | JWT audience; defaults to `BETTER_AUTH_URL` | No |
-| `JWT_JWKS_URL` | Direct Express `/api/auth/jwks` endpoint | Recommended |
 
 ### Critical Vercel settings
 
 - **MongoDB Atlas IP whitelist:** Add Vercel's outbound IP ranges to your Atlas cluster's Network Access list, or serverless function connections will fail.
-- **`CORS_ORIGIN`:** For each Vercel environment, list the exact corresponding frontend origin(s), including the stable Preview origin when used.
-- **`JWT_JWKS_URL`:** Set to the direct backend deployment URL plus `/api/auth/jwks`; this avoids routing backend key lookups through the frontend rewrite.
-- **`BETTER_AUTH_URL`:** Set to the public frontend origin plus `/api/auth`; it must match the JWT issuer and audience defaults and the Google callback origin.
+- **`BETTER_AUTH_URL`:** Set to the public frontend origin plus `/api/auth`; it is also the JWT issuer and audience. CORS and Better Auth trusted origins are derived from it.
+- **`JWT_JWKS_URL`:** Set to the direct backend deployment URL plus `/api/auth/jwks`, avoiding an auth rewrite hop for backend key lookups.
 - **Google OAuth:** Register `<frontend-origin>/api/auth/callback/google` for both the production domain and the stable Preview domain if Google login is enabled.
 
 Production and Preview are configured independently in Vercel. Use a stable
-frontend Preview domain so the backend Preview `CORS_ORIGIN`, `BETTER_AUTH_URL`,
-and Google callback registration can match it. If generated preview URLs are
-used, those settings must be updated for each active URL. `DB_NAME` remains an
-accepted legacy alias for `MONGODB_DB_NAME`; do not set both.
+frontend Preview domain so backend Preview `BETTER_AUTH_URL` and Google
+callback registration match it. If generated preview URLs are used, update
+those settings for each active URL.
 
 ### Local development
 

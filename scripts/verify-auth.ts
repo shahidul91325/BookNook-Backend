@@ -156,6 +156,27 @@ const run = async (): Promise<void> => {
     check("session lookup no longer returns a user", !sessionBody?.user);
     check("JWT endpoint cannot mint a token after sign-out", !tokenAfterSignOut.ok);
 
+    const signIn = await request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const signInCookies = signIn.headers
+      .getSetCookie()
+      .map((value) => value.split(";", 1)[0])
+      .filter(Boolean);
+    const signedInSession = await request("/api/auth/get-session", {
+      headers: { cookie: signInCookies.join("; ") },
+    });
+    const signedInSessionBody = (await signedInSession.json().catch(() => null)) as
+      | { user?: { id?: string } }
+      | null;
+    check("email/password sign-in succeeds", signIn.ok);
+    check(
+      "new session cookie persists across a follow-up request",
+      signedInSessionBody?.user?.id === signUpBody?.user?.id
+    );
+
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) process.exitCode = 1;
   } finally {

@@ -9,7 +9,6 @@ export const createAuth = (db: Db) =>
   betterAuth({
     database: mongodbAdapter(db),
     baseURL: env.BETTER_AUTH_URL,
-    basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: env.CORS_ORIGINS,
     emailAndPassword: { enabled: true },
@@ -36,8 +35,8 @@ export const createAuth = (db: Db) =>
     plugins: [
       jwt({
         jwt: {
-          issuer: env.JWT_ISSUER,
-          audience: env.JWT_AUDIENCE,
+          issuer: env.BETTER_AUTH_URL,
+          audience: env.BETTER_AUTH_URL,
           expirationTime: "15m",
         },
       }),

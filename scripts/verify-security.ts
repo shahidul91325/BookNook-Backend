@@ -206,7 +206,7 @@ const run = async (): Promise<void> => {
 
   const send = (
     path: string,
-    method: "POST" | "PATCH" | "PUT" | "DELETE",
+    method: "POST" | "PATCH" | "DELETE",
     body: unknown,
     token?: string,
     rawBody?: string
@@ -316,19 +316,11 @@ const run = async (): Promise<void> => {
     const protectedCalls: Array<[string, Promise<HttpResult>]> = [
       ["POST /api/books", send("/api/books", "POST", { title: "X" })],
       ["GET /api/my-books", get("/api/my-books")],
-      ["GET /api/books/my", get("/api/books/my")],
-      ["GET /api/books/user", get("/api/books/user")],
       ["PATCH /api/books/:id", send(`/api/books/${secureId}`, "PATCH", { title: "X" })],
-      ["PUT /api/books/:id", send(`/api/books/${secureId}`, "PUT", { title: "X" })],
       ["DELETE /api/books/:id", send(`/api/books/${secureId}`, "DELETE", undefined)],
       ["POST /api/borrows", send("/api/borrows", "POST", { bookId: secureId })],
       ["GET /api/borrows", get("/api/borrows")],
-      ["GET /api/my-borrows", get("/api/my-borrows")],
-      ["GET /api/borrows/my", get("/api/borrows/my")],
-      ["GET /api/borrows/user", get("/api/borrows/user")],
       ["DELETE /api/borrows/:id", send(`/api/borrows/${new ObjectId().toString()}`, "DELETE", undefined)],
-      ["PUT /api/borrows/:id/return", send(`/api/borrows/${new ObjectId().toString()}/return`, "PUT", undefined)],
-      ["PATCH /api/borrows/:id/return", send(`/api/borrows/${new ObjectId().toString()}/return`, "PATCH", undefined)],
     ];
     for (const [label, call] of protectedCalls) {
       const result = await call;
@@ -352,9 +344,6 @@ const run = async (): Promise<void> => {
     const patch = await send(`/api/books/${secureId}`, "PATCH", { title: "Bob Was Here" }, bobToken);
     check("403 when another user updates your book", patch.status === 403);
     checkErrorEnvelope("foreign update", patch);
-
-    const put = await send(`/api/books/${secureId}`, "PUT", { title: "Bob Was Here" }, bobToken);
-    check("403 via PUT alias too", put.status === 403);
 
     const del = await send(`/api/books/${secureId}`, "DELETE", undefined, bobToken);
     check("403 when another user deletes your book", del.status === 403);
@@ -381,16 +370,10 @@ const run = async (): Promise<void> => {
     }
     const patch = await send(`/api/books/${badIds[0]}`, "PATCH", { title: "X" }, aliceToken);
     check("PATCH with malformed id → 400", patch.status === 400);
-    const put = await send(`/api/books/${badIds[1]}`, "PUT", { title: "X" }, aliceToken);
-    check("PUT with malformed id → 400", put.status === 400);
     const del = await send(`/api/books/${badIds[2]}`, "DELETE", undefined, aliceToken);
     check("DELETE with malformed id → 400", del.status === 400);
     const retDel = await send(`/api/borrows/${badIds[0]}`, "DELETE", undefined, aliceToken);
     check("DELETE borrow with malformed id → 400", retDel.status === 400);
-    const retPut = await send(`/api/borrows/${badIds[1]}/return`, "PUT", undefined, aliceToken);
-    check("PUT /return with malformed id → 400", retPut.status === 400);
-    const retPatch = await send(`/api/borrows/${badIds[3]}/return`, "PATCH", undefined, aliceToken);
-    check("PATCH /return with malformed id → 400", retPatch.status === 400);
 
     // A well-formed but unknown id is a 404, not a crash.
     const ghost = await get(`/api/books/${new ObjectId().toString()}`);
@@ -698,11 +681,9 @@ const run = async (): Promise<void> => {
     const createdBook = created.body.data as ApiBook;
     check("created book readable publicly", (await get(`/api/books/${createdBook.id}`)).status === 200);
 
-    // 6. Update (PATCH and the frontend's PUT alias)
+    // 6. Update
     const patched = await send(`/api/books/${createdBook.id}`, "PATCH", { title: "Phase Eight Book (Updated)" }, aliceToken);
     check("PATCH /api/books/:id → 200 + data", patched.status === 200 && (patched.body.data as ApiBook).title === "Phase Eight Book (Updated)");
-    const put = await send(`/api/books/${createdBook.id}`, "PUT", { rating: 4.9 }, aliceToken);
-    check("PUT /api/books/:id → 200 (frontend alias)", put.status === 200 && (put.body.data as ApiBook).rating === 4.9);
 
     // 7. Delete
     const deleted = await send(`/api/books/${createdBook.id}`, "DELETE", undefined, aliceToken);
@@ -718,21 +699,14 @@ const run = async (): Promise<void> => {
       borrowRow.userId === aliceId.toString() && borrowRow.bookTitle === "Delete Me Book"
       && borrowRow.userEmail === "alice@test.local" && borrowRow.status === "borrowed");
 
-    // 9. Borrow list (+ aliases)
+    // 9. Borrow list
     const borrowsList = await get("/api/borrows", aliceToken);
     check("GET /api/borrows → 200 + data array",
       borrowsList.status === 200 && Array.isArray(borrowsList.body.data) && typeof borrowsList.body.total === "number");
-    for (const alias of ["/api/my-borrows", "/api/borrows/my", "/api/borrows/user"]) {
-      const res = await get(alias, aliceToken);
-      check(`${alias} alias → 200`, res.status === 200);
-    }
     const myBooks = await get("/api/my-books", aliceToken);
     check("GET /api/my-books → 200 + own books only",
       myBooks.status === 200 && (myBooks.body.books ?? []).every((b) => b.addedBy === aliceId.toString()));
-    check("/api/books/my alias → 200", (await get("/api/books/my", aliceToken)).status === 200);
-    check("/api/books/user alias → 200", (await get("/api/books/user", aliceToken)).status === 200);
-
-    // 10. Return (DELETE + PUT/PATCH aliases)
+    // 10. Return
     const returned = await send(`/api/borrows/${borrowRow.id}`, "DELETE", undefined, aliceToken);
     check("DELETE /api/borrows/:id → 200 + success flag",
       returned.status === 200 && returned.body.status === "success" && returned.body.success === true);
@@ -741,8 +715,8 @@ const run = async (): Promise<void> => {
 
     const borrowedAgain = await send("/api/borrows", "POST", { bookId: deleteMeId }, aliceToken);
     const secondRow = borrowedAgain.body.data as ApiBorrow;
-    const putReturn = await send(`/api/borrows/${secondRow.id}/return`, "PUT", undefined, aliceToken);
-    check("PUT /api/borrows/:id/return → 200 (frontend alias)", putReturn.status === 200);
+    const secondReturn = await send(`/api/borrows/${secondRow.id}`, "DELETE", undefined, aliceToken);
+    check("DELETE /api/borrows/:id → 200", secondReturn.status === 200);
 
     // 404 consistency for unknown routes
     const notFound = await get("/api/definitely-missing");

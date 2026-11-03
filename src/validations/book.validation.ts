@@ -92,7 +92,7 @@ export const createBookSchema = z.object({
 });
 
 /**
- * Body schema for PATCH/PUT /api/books/:id — every field is OPTIONAL so
+ * Body schema for PATCH /api/books/:id — every field is OPTIONAL so
  * omitted fields are simply preserved (only provided fields are $set).
  *
  * SECURITY: like the create schema, it declares NO ownership fields

@@ -121,9 +121,8 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   });
   // Note: `createApp` never calls `app.listen()`. Listening is the
   // responsibility of `src/server.ts` (persistent dev/production server).
-  // The Vercel serverless entry point (`src/api/index.ts`) invokes the
-  // returned Express app directly as a request handler — no listening
-  // socket is ever opened in a serverless function.
+  // The root Vercel entry point exports the returned Express app directly;
+  // no listening socket is opened in a serverless function.
   // Health check — /api/health (no auth, no DB required)
   app.get('/api/health', (_req: Request, res: Response) => {
     sendSuccess(res, {
@@ -157,56 +156,29 @@ const createApp = (db: Db, options: AppOptions = {}): Express => {
   app.post('/api/books', writeLimiter, requireAuth, validateBody(createBookSchema), createCreateBook(db));
 
   // ── My Books (owner list) ──────────────────────────────────────────────
-  // The frontend's getMyBooks() tries /api/my-books first, then falls back
-  // to /api/books/my and /api/books/user. All three are implemented so the
-  // fallback chain resolves on the first hop. The owner filter is ALWAYS
-  // the verified session user id — the email in the frontend's final
-  // fallback (/api/books/user/:email) is deliberately NOT implemented as an
-  // identity source: trusting a client-supplied email would let anyone
-  // enumerate another user's books. That route simply 404s, and the chain
-  // never reaches it because the session-based routes succeed.
-  // Registered BEFORE GET /api/books/:id so ":id" cannot swallow "my"/"user".
+  // The owner filter always comes from the verified JWT subject.
   app.get('/api/my-books', requireAuth, createGetMyBooks(db));
-  app.get('/api/books/my', requireAuth, createGetMyBooks(db));
-  app.get('/api/books/user', requireAuth, createGetMyBooks(db));
 
   // ── Public book read APIs ───────────────────────────────────────────────
   // Assignment requirement: catalog + details stay publicly readable.
-  // NOTE: static sub-routes (e.g. GET /api/books/my) are registered above,
-  // BEFORE this `:id` route, otherwise ":id" would swallow them.
   app.get('/api/books', createGetBooks(db));
   app.get('/api/books/:id', validateObjectId('book'), createGetBookById(db));
 
   // ── Book update & delete (owner-only) ──────────────────────────────────
-  // The assignment specifies PATCH /api/books/:id; the frontend's
-  // bookService.updateBook() sends PUT. Both verbs share the same handler
-  // so the API contract holds for either caller. DELETE matches the
-  // frontend's bookService.deleteBook() exactly.
+  // PATCH is the single partial-update contract used by the frontend.
   const updateGuards = [writeLimiter, requireAuth, validateObjectId('book'), validateBody(updateBookSchema)] as const;
   app.patch('/api/books/:id', ...updateGuards, createUpdateBook(db));
-  app.put('/api/books/:id', ...updateGuards, createUpdateBook(db));
   app.delete('/api/books/:id', writeLimiter, requireAuth, validateObjectId('book'), createDeleteBook(db));
 
   // ── Borrowing & returning ──────────────────────────────────────────────
   // POST /api/borrows reserves a copy atomically and records the borrow.
   app.post('/api/borrows', writeLimiter, requireAuth, validateBody(borrowBookSchema), createBorrowBook(db));
 
-  // GET /api/borrows lists ONLY the verified session user's records. The
-  // aliases match the frontend's getUserBorrows() fallback chain; the
-  // email-based variants (/api/borrows/user/:email, ?email=) are
-  // deliberately NOT implemented — identity never comes from the client.
+  // GET /api/borrows lists only the verified JWT subject's records.
   app.get('/api/borrows', requireAuth, createGetMyBorrows(db));
-  app.get('/api/my-borrows', requireAuth, createGetMyBorrows(db));
-  app.get('/api/borrows/my', requireAuth, createGetMyBorrows(db));
-  app.get('/api/borrows/user', requireAuth, createGetMyBorrows(db));
 
-  // DELETE /api/borrows/:id marks the borrow returned and restores the
-  // copy exactly once. The PUT/PATCH /return aliases match the frontend's
-  // preferred returnBook() paths so its first request succeeds.
-  const returnGuards = [writeLimiter, requireAuth] as const;
-  app.delete('/api/borrows/:id', ...returnGuards, validateObjectId('borrow'), createReturnBook(db));
-  app.put('/api/borrows/:id/return', ...returnGuards, validateObjectId('borrow'), createReturnBook(db));
-  app.patch('/api/borrows/:id/return', ...returnGuards, validateObjectId('borrow'), createReturnBook(db));
+  // DELETE /api/borrows/:id marks the record returned and restores the copy.
+  app.delete('/api/borrows/:id', writeLimiter, requireAuth, validateObjectId('borrow'), createReturnBook(db));
 
   // 404 + centralized error handling (must come after routes).
   // The error handler maps every failure onto the standard envelope and

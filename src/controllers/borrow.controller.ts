@@ -185,8 +185,7 @@ export const createGetMyBorrows =
  *
  * The record must belong to the authenticated user. The borrowed→returned
  * flip is an atomic conditional update, so duplicate/concurrent returns
- * can restore the copy exactly once. PUT/PATCH /api/borrows/:id/return are
- * aliases matching the frontend's preferred return paths.
+ * can restore the copy exactly once.
  */
 export const createReturnBook =
   (db: Db): RequestHandler =>

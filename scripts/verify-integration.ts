@@ -125,12 +125,12 @@ const run = async (): Promise<void> => {
     check("book details are public", details.ok);
 
     const editByOther = await request(`/api/books/${bookId}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: { ...auth(borrower), "content-type": "application/json" },
       body: JSON.stringify({ title: "Unauthorized Edit" }),
     });
     const editByOwner = await request(`/api/books/${bookId}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: { ...auth(owner), "content-type": "application/json" },
       body: JSON.stringify({ title: "Atomic Flow Book Updated" }),
     });
@@ -155,16 +155,16 @@ const run = async (): Promise<void> => {
     check("the same user cannot borrow the same book twice", duplicateBorrow.status === 409);
     check("another user cannot borrow when no copies remain", noCopiesBorrow.status === 409);
 
-    const returnByOther = await request(`/api/borrows/${borrowId}/return`, {
-      method: "PUT",
+    const returnByOther = await request(`/api/borrows/${borrowId}`, {
+      method: "DELETE",
       headers: auth(otherUser),
     });
-    const returnByBorrower = await request(`/api/borrows/${borrowId}/return`, {
-      method: "PUT",
+    const returnByBorrower = await request(`/api/borrows/${borrowId}`, {
+      method: "DELETE",
       headers: auth(borrower),
     });
-    const duplicateReturn = await request(`/api/borrows/${borrowId}/return`, {
-      method: "PUT",
+    const duplicateReturn = await request(`/api/borrows/${borrowId}`, {
+      method: "DELETE",
       headers: auth(borrower),
     });
     check("another user cannot return the borrow", returnByOther.status === 403);
@@ -173,8 +173,8 @@ const run = async (): Promise<void> => {
 
     const secondBorrow = await borrow(otherUser);
     const secondBorrowBody = (await secondBorrow.json()) as Envelope & { data?: { id?: string } };
-    const secondReturn = await request(`/api/borrows/${secondBorrowBody.data?.id}/return`, {
-      method: "PUT",
+    const secondReturn = await request(`/api/borrows/${secondBorrowBody.data?.id}`, {
+      method: "DELETE",
       headers: auth(otherUser),
     });
     const afterReturn = await request(`/api/books/${bookId}`);
