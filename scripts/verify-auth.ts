@@ -46,11 +46,15 @@ const run = async (): Promise<void> => {
         },
       });
 
+    const anonymousToken = await request("/api/auth/token");
+    check("JWT token endpoint requires an active session before registration", anonymousToken.status === 401);
+
     console.log("\n1. Email/password sign-up and session persistence");
+    const avatarUrl = "https://i.ibb.co/verification/avatar.png";
     const signUp = await request("/api/auth/sign-up/email", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "JWT Verification User", email, password }),
+      body: JSON.stringify({ name: "JWT Verification User", email, password, image: avatarUrl }),
     });
     const signUpBody = (await signUp.json().catch(() => null)) as
       | { user?: { id?: string } }
@@ -62,6 +66,8 @@ const run = async (): Promise<void> => {
     check("Express Better Auth handles email sign-up", signUp.ok);
     check("sign-up returns the stable user id", Boolean(signUpBody?.user?.id));
     check("sign-up sets the session cookie", cookieParts.length > 0);
+    const persistedUser = await db.collection("user").findOne({ email });
+    check("registration persists the supplied avatar URL to Better Auth user.image", persistedUser?.image === avatarUrl);
 
     const cookie = cookieParts.join("; ");
     const tokenResponse = await request("/api/auth/token", {
